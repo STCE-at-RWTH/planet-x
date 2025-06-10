@@ -1,0 +1,6 @@
+# don't commit huge binary blobs please
+data
+gfx
+
+!data/filler.txt
+!gfx/filler.txt
