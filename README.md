@@ -25,7 +25,12 @@ and
 ]add Pluto
 ```
 
-Pluto can be started from the terminal with `julia -e "using Pluto; Pluto.run(enable_ai_editor_features=false)"`. I guess you could turn on the LLM features, if you really felt like it.
+Pluto can be started from the terminal with 
+```
+julia -e "using Pluto; Pluto.run(enable_ai_editor_features=false)"
+``` 
+
+I guess you could turn on the LLM features, if you really felt like it.
 
 ## `data` and `gfx`
 
