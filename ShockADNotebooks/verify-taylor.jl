@@ -25,7 +25,9 @@ end
 
 # ╔═╡ e93237ca-27d8-415f-a4dd-99eb4f530f69
 begin
-	using ForwardDiff
+	using DifferentiationInterface
+	import ForwardDiff
+	import Mooncake
 	using LaTeXStrings
 	using LinearAlgebra
 	using Plots
@@ -34,8 +36,6 @@ begin
 	using ShockwaveProperties.BilligShockParametrization
 	using Tullio
 	using Unitful
-	using UnitfulChainRules
-	using Zygote
 end;
 
 # ╔═╡ 2af7b8a2-b5d7-4957-84c2-815d52b0ebd3
@@ -588,7 +588,7 @@ function ∂n̂∂M(α, M)
 end
 
 # ╔═╡ be87856e-320d-4611-8ad0-c255b96e7827
-let α = 0.0:0.005:3.0, εs = [0.5, 0.1, 0.05, 0.01, 0.005, 0.001, 0.0005, 0.0001]
+let α = 0.0:0.005:3.0, εs = [0.5, 0.1, 0.01, 0.001, 0.0001]
 	Γ = shock_front.(α, 4.0, 1.0)
 	n = shock_normal.(α, 4.0, 1.0)
 	shock_displacement = map(εs) do ε

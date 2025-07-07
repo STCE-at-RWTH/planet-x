@@ -39,6 +39,11 @@ begin
     using Euler2D: TangentQuadCell
 end
 
+# ╔═╡ 15c5d10c-4d9a-4f57-a8fd-b65a970ac73c
+begin
+	using OhMyThreads
+end
+
 # ╔═╡ 31009964-3f32-4f97-8e4a-2b95be0f0037
 using PlanePolygons
 
@@ -51,6 +56,9 @@ end
 # ╔═╡ e4b54bd3-5fa9-4291-b2a4-6b10c494ce34
 # get some internal bindings from Euler2D
 using Euler2D: _dirs_dim, select_middle
+
+# ╔═╡ e5036dd3-9070-4521-9d7d-e0293b967d78
+using ShockwaveProperties: BilligShockParametrization
 
 # ╔═╡ d8bfb40f-f304-41b0-9543-a4b10e95d182
 using PlanePolygons: _poly_image
@@ -139,7 +147,12 @@ Load up a data file. This contains a forward-mode computation on a fine grid all
 """
 
 # ╔═╡ 90bf50cf-7254-4de8-b860-938430e121a9
-sim_with_ad = load_cell_sim("../data/tangent_last_tstep.celltape");
+sim_with_ad = 
+	#load_cell_sim("../data/tangent_last_tstep.celltape");
+	load_cell_sim("../data/probe_obstacle_tangent_very_long_time_selected_tsteps.celltape");
+
+# ╔═╡ fffcb684-9b58-43d7-850a-532c609c5389
+boundary_conditions = (ExtrapolateToPhantom(), StrongWall(), ExtrapolateToPhantom(), ExtrapolateToPhantom(), StrongWall())
 
 # ╔═╡ 33e635b3-7c63-4b91-a1f2-49da93307f29
 md"""
@@ -190,8 +203,8 @@ pressure_tangent = dPdp(sim_with_ad, n);
 begin
     pplot = heatmap(
         pfield';
-        xlims = (0, 300),
-        ylims = (0, 450),
+        xlims = (0, 400),
+        ylims = (0, 400),
         aspect_ratio = :equal,
         title = L"P",
     )
@@ -204,8 +217,8 @@ begin
     dpplot = [
         heatmap(
             (@view(pressure_tangent[i, :, :]))';
-            xlims = (0, 300),
-            ylims = (0, 450),
+            xlims = (0, 400),
+            ylims = (0, 400),
             aspect_ratio = :equal,
             clims = cbar_limits[i],
             title = titles[i],
@@ -226,8 +239,8 @@ let
     title = L"\frac{\partial P}{\partial M_\inf}"
     p = heatmap(
         (@view(dPdM[2, :, :]))';
-        xlims = (0, 300),
-        ylims = (0, 450),
+        xlims = (0, 400),
+        ylims = (0, 400),
         aspect_ratio = :equal,
         clims = (-10, 10),
         title = title,
@@ -252,8 +265,19 @@ md"""
 ---
 """
 
+# ╔═╡ 6e4d2f60-3c40-4a2b-be2b-8c4cc40fb911
+function pad_pfield_from_bcs(pfield)
+	padded = similar(pfield, eltype(pfield), size(pfield).+2)
+	padded[2:end-1, 2:end-1] = pfield
+	@views padded[1, 2:end-1] = padded[2, 2:end-1]
+	@views padded[end, 2:end-1] = padded[end-1, 2:end-1]
+	@views padded[:, 1] = padded[:, 2]
+	@views padded[:, end] = padded[:, end-1]
+	return padded
+end
+
 # ╔═╡ 706146ae-3dbf-4b78-9fcc-e0832aeebb28
-_diff_op(T) = SVector{3,T}(one(T), zero(T), -one(T))
+_diff_op(T) = SVector{3,T}(-one(T), zero(T), one(T))
 
 # ╔═╡ 9b6ab300-6434-4a96-96be-87e30e35111f
 _avg_op(T) = SVector{3,T}(one(T), 2 * one(T), one(T))
@@ -298,6 +322,7 @@ end
 
 # ╔═╡ 5c0be95f-3c4a-4062-afeb-3c1681cae549
 function gradient_grid_direction(θ)
+	@assert -π ≤ θ ≤ π
     if -π / 8 ≤ θ < π / 8
         return CartesianIndex(1, 0)
     elseif π / 8 ≤ θ < 3 * π / 8
@@ -351,7 +376,7 @@ function find_shock_in_timestep(
 ) where {T,C}
     # TODO really gotta figure out how to deal with nothings or missings in this matrix
     pfield = map(p -> isnothing(p) ? zero(T) : p, pressure_field(sim, t, gas))
-    Gx, Gy = convolve_sobel(pfield)
+    Gx, Gy = convolve_sobel(pad_pfield_from_bcs(pfield))
     dP2 = Gx .^ 2 + Gy .^ 2
     edge_candidates = Array{Bool,2}(undef, size(dP2) .- 2)
     window_size = CartesianIndex(2, 2)
@@ -365,20 +390,21 @@ function find_shock_in_timestep(
     @info "Number of candidates..." n_candidates = sum(edge_candidates)
     Gx_overlay = @view(Gx[2:end-1, 2:end-1])
     Gy_overlay = @view(Gy[2:end-1, 2:end-1])
-    id_overlay = @view(sim.cell_ids[3:end-2, 3:end-2])
+    id_overlay = @view(sim.cell_ids[2:end-1, 2:end-1])
     num_except = 0
+	except_infos = Dict{CartesianIndex{2}, Int}()
     num_reject_too_smooth = 0
     num_reject_rh_fail = 0
     for j ∈ eachindex(IndexCartesian(), edge_candidates, Gx_overlay, Gy_overlay, id_overlay)
-        i = j + CartesianIndex(2, 2)
+        i = j + CartesianIndex(1, 1)
         if id_overlay[j] > 0 && edge_candidates[j]
             θ = atan(Gy_overlay[j], Gx_overlay[j])
             θ_disc = discretize_gradient_direction(θ)
             θ_grid = gradient_grid_direction(θ_disc)
             # gradient points in direction of steepest increase...
             # cell in "front" of shock should be opposite the gradient?
-            id_front = sim.cell_ids[i-θ_grid]
-            id_back = sim.cell_ids[i+θ_grid]
+            id_front = sim.cell_ids[i+θ_grid]
+            id_back = sim.cell_ids[i-θ_grid]
             if id_front == 0 || id_back == 0
                 edge_candidates[j] = false
                 continue
@@ -399,7 +425,8 @@ function find_shock_in_timestep(
             catch de
                 if de isa DomainError
                     #@warn "Cell shock comparison caused error" typ=typeof(de) j θ_grid
-                    edge_candidates[j] = false
+					except_infos[θ_grid] = get(except_infos, θ_grid, 0) + 1
+                    edge_candidates[j] = true
                     num_except += 1
                 else
                     rethrow()
@@ -411,8 +438,15 @@ function find_shock_in_timestep(
     end
     @info "Number of candidates after RH condition thresholding..." n_candidates =
         sum(edge_candidates) num_except num_reject_rh_fail num_reject_too_smooth
+	@info "Exceptions triggered on following:" except_infos
     return edge_candidates
 end
+
+# ╔═╡ a974c692-5171-4049-95aa-def2c776061b
+_diff_op(Float64) * _avg_op(Float64)'
+
+# ╔═╡ 4db61526-1e3a-47ac-8e2f-66634c3947c2
+_avg_op(Float64) * _diff_op(Float64)'
 
 # ╔═╡ bc0c6a41-adc8-4d18-9574-645704f54b72
 md"""
@@ -433,10 +467,9 @@ The implemented shock sensor has some issues (we need to set ``TOL=0.7``), but p
 @bind smoothness_err Slider(0.000:0.005:0.2, show_value = true, default = 0.1)
 
 # ╔═╡ 4b036b02-1089-4fa8-bd3a-95659c9293cd
-# ╠═╡ show_logs = false
 sf = find_shock_in_timestep(
     sim_with_ad,
-    2,
+    6,
     DRY_AIR;
     rh_rel_error_max = rh_err,
     continuous_variation_thold = smoothness_err,
@@ -444,7 +477,7 @@ sf = find_shock_in_timestep(
 
 # ╔═╡ 24da34ca-04cd-40ae-ac12-c342824fa26e
 let
-    data = map(sf, @view sim_with_ad.cell_ids[3:end-2, 3:end-2]) do v1, v2
+    data = map(sf, @view sim_with_ad.cell_ids[2:end-1, 2:end-1]) do v1, v2
         if v2 == 0
             missing
         else
@@ -452,20 +485,42 @@ let
         end
     end
     p = heatmap(
-        cell_centers(sim_with_ad, 1)[3:end-2],
-        cell_centers(sim_with_ad, 2)[3:end-2],
+        cell_centers(sim_with_ad, 1)[2:end-1],
+        cell_centers(sim_with_ad, 2)[2:end-1],
         data';
         cbar = false,
         aspect_ratio = :equal,
-        xlims = (-2, 0),
-        ylims = (-1.5, 1.5),
+        xlims = (-1.5, 0.5),
+        ylims = (0., 2.0),
         xlabel = L"x",
         ylabel = L"y",
-        size = (350, 500),
+        size = (700, 500),
         dpi = 1000,
     )
-    savefig(p, "../gfx/shock_sensor_07_01.pdf")
+    #savefig(p, "../gfx/shock_sensor_07_01.pdf")
     p
+end
+
+# ╔═╡ 9ac61e80-7d6a-40e8-8254-ee306f8248c3
+let
+	pf = map(p -> isnothing(p) ? 0.0 : p, pressure_field(sim_with_ad, 6, DRY_AIR))
+	a, b = convolve_sobel(pf)
+	x, y = cell_centers(sim_with_ad)
+	th = discretize_gradient_direction.(atan.(b, a)).*(4/π)
+	dP2 = a.^2 .+ b.^2
+	p1 = heatmap(x[2:end-1], y[2:end-1], th', aspect_ratio=:equal, ylims=(0., 2.), xlims=(-1.5, 0.5))
+	edge_candidates = Array{Bool,2}(undef, size(dP2) .- 2)
+    window_size = CartesianIndex(2, 2)
+    for i ∈ eachindex(IndexCartesian(), edge_candidates)
+        edge_candidates[i] = mark_edge_candidate(
+            @view(dP2[i:i+window_size]),
+            a[i+CartesianIndex(1, 1)],
+            b[i+CartesianIndex(1, 1)],
+        )
+    end
+	p2 = heatmap(x[3:end-2], y[3:end-2], edge_candidates', aspect_ratio=:equal, ylims=(0., 2.), xlims=(-1.5, 0.5))
+	#plot(p1, p2)
+	p2
 end
 
 # ╔═╡ 92044a9f-2078-48d1-8181-34be87b03c4c
@@ -496,14 +551,6 @@ struct CoarseQuadCell{T,NS,NTAN}
     du_dpts::SMatrix{4,8,T,32}
 end
 
-# ╔═╡ b34a8bfd-5aba-459e-bf05-47d0225b7075
-struct DynFVMCell{T,NS,NTAN}
-    id::Int
-    poly::ClosedPolygon{T}
-    u::SVector{4,T}
-    u̇::SMatrix{4,NS,T,NTAN}
-end
-
 # ╔═╡ 95947312-342f-44b3-90ca-bd8ad8204e18
 begin
     function cell_boundary_polygon(cell::Euler2D.QuadCell)
@@ -518,9 +565,6 @@ begin
     end
     function cell_boundary_polygon(cell::CoarseQuadCell)
         return cell.pts
-    end
-    function cell_boundary_polygon(cell::DynFVMCell)
-        return cell.poly
     end
 end
 
@@ -578,7 +622,7 @@ We can construct cells from these points and apply the conservation law again to
 """
 
 # ╔═╡ 7468fbf2-aa57-4505-934c-baa4dcb646fc
-const cell_width_at_shock = 0.0375
+const cell_width_at_shock = 0.075
 
 # ╔═╡ 50a46d6d-deb7-4ad0-867a-4429bf55632f
 md"""
@@ -586,18 +630,18 @@ This should be ``8k``...
 """
 
 # ╔═╡ 766b440b-0001-4037-8959-c0b7f04d999e
-const num_coarse_cells_pos_y = 32
+const num_coarse_cells_pos_y = 16
 
 # ╔═╡ d44322b1-c67f-4ee8-b168-abac75fb42a1
-begin
+const num_coarse_cells = begin
     ypts2 = begin
-        yr = range(; start = 0.0, stop = 1.2, length = num_coarse_cells_pos_y + 1)
+        yr = range(; start = 0.0, stop = 2.0, length = num_coarse_cells_pos_y + 1)
         s = step(yr)
-        y = collect(-2*s:s:1.2)
+        y = collect(-2*s:s:2.0)
         y
     end
-    const num_coarse_cells = num_coarse_cells_pos_y + 2
-end;
+    num_coarse_cells_pos_y + 2
+end
 
 # ╔═╡ 2f088a0c-165e-47f9-aaeb-6e4ab31c9d26
 begin
@@ -610,6 +654,9 @@ begin
         (all_shock_points[3, 1] - all_shock_points[1, 1])
 
     function x_shock(y)
+		if y < 0
+			return x_shock(-y)
+		end
         if all_shock_points[1, 2] < y < all_shock_points[end, 2]
             return sp_interp(y)
         elseif all_shock_points[1, 2] ≥ y
@@ -684,7 +731,7 @@ let
         yc;
         aspect_ratio = :equal,
         xlims = (-2.05, 0.05),
-        ylims = (-0.2, 1.7),
+        ylims = (-0.2, 2.2),
         label = "Blunt Body",
         fill = true,
         dpi = 1000,
@@ -747,10 +794,16 @@ We'll need lots of helper functions to deal with the new mesh.
 ---
 """
 
+# ╔═╡ 61945d45-03f4-4401-8b18-3d11420047d0
+minimum_cell_size(sim) = mapreduce(c->c.extent, (a, b,)->min.(a, b), values(nth_step(sim, 1)[2]); init=(Inf, Inf))
+
+# ╔═╡ 0511fbcd-8b44-481c-a176-c0657b6557c2
+minimum_cell_size(sim_with_ad)
+
 # ╔═╡ 729ebc48-bba1-4858-8369-fcee9f133ee0
 function is_cell_contained_by(cell::Union{Euler2D.QuadCell,CoarseQuadCell}, closed_poly)
     return all(edge_starts(cell_boundary_polygon(cell))) do p
-        PlanePolygons.point_inside(closed_poly, p)
+        PlanePolygons.point_inside_strict(closed_poly, p)
     end
 end
 
@@ -764,20 +817,36 @@ end
 
 # ╔═╡ f252b8d0-f067-468b-beb3-ff6ecaeca722
 function all_cells_contained_by(poly, sim::CellBasedEulerSim)
+	Δx, Δy = minimum_cell_size(sim)
+	window_x = extrema(pt->pt[1], edge_starts(poly)) .+ (-Δx, Δx)
+    window_y = extrema(pt->pt[2], edge_starts(poly)) .+ (-Δy, Δy)
     _, cells = nth_step(sim, 1)
-    return filter(sim.cell_ids) do id
-        id == 0 && return false
+	in_window = Iterators.filter(sim.cell_ids) do id
+		id == 0 && return false
+		window_x[1] ≤ cells[id].center[1] ≤ window_x[2] || return false
+		window_y[1] ≤ cells[id].center[2] ≤ window_y[2] || return false
+		return true
+	end
+	return collect(Iterators.filter(in_window) do id
         return is_cell_contained_by(cells[id], poly)
-    end
+    end)
 end
 
 # ╔═╡ 571b1ee7-bb07-4b30-9870-fbd18349a2ef
 function all_cells_overlapping(poly, sim::CellBasedEulerSim)
+	Δx, Δy = minimum_cell_size(sim)
+	window_x = extrema(pt->pt[1], edge_starts(poly)) .+ (-Δx, Δx)
+    window_y = extrema(pt->pt[2], edge_starts(poly)) .+ (-Δy, Δy)
     _, cells = nth_step(sim, 1)
-    return filter(sim.cell_ids) do id
-        id == 0 && return false
+	in_window = Iterators.filter(sim.cell_ids) do id
+		id == 0 && return false
+		window_x[1] ≤ cells[id].center[1] ≤ window_x[2] || return false
+		window_y[1] ≤ cells[id].center[2] ≤ window_y[2] || return false
+		return true
+	end
+	return collect(Iterators.filter(in_window) do id
         return is_cell_overlapping(cells[id], poly)
-    end
+    end)
 end
 
 # ╔═╡ 80cde447-282a-41e5-812f-8eac044b0c15
@@ -818,184 +887,52 @@ begin
     poly_area_prep = prepare_gradient(poly_area, diff_backend, empty_coarse[2].pts)
 end;
 
+# ╔═╡ a968296a-43c1-48f3-b4b8-0d81cb162b7b
+function intersection_point_jacobian(point, poly1, poly2)
+	N = num_vertices(poly1)
+	J = zeros(eltype(point), (2, 2*N))
+	foreach(enumerate(zip(edge_starts(poly1), edge_ends(poly1)))) do (i, (p1, p2))
+		if is_other_point_on_line(Line(p1, p2-p1), point)
+			for ell2 ∈ Iterators.filter(ℓ->is_other_point_on_line(ℓ, point), edge_lines(poly2))
+				jac = DifferentiationInterface.jacobian(fdiff_backend, vcat(p1, p2)) do vals
+					q1 = vals[SVector(1,2)]
+					q2 = vals[SVector(3,4)]
+					return line_intersect(Line(q1, q2-q1), ell2)
+				end
+				j = ((i+1) % N) + 1
+				J[2*i-1:2*i] = jac[SVector(1,2)]
+				J[2*j-1:2*j] = jac[SVector(3,4)]
+			end
+		end
+	end
+	return J
+end
+
+# ╔═╡ 6f303343-1f76-46f9-80e8-2dd4ae1b5427
+function fdiff_eps(arg::T) where {T<:Real}
+	cbrt_eps = cbrt(eps(T))
+	h = 2^(round(log2((1+abs(arg))*cbrt_eps)))
+	return h
+end
+
 # ╔═╡ d87e0bb8-317e-4d48-8008-a7071c74ab31
 # gets the jacobian of the intersection area w.r.t. the first argument
 function intersection_area_jacobian(flat_poly1, poly2)
-    eps = 1.0e-10
     grad1 = zero(flat_poly1)
     for i in eachindex(flat_poly1)
-        in1 = @set flat_poly1[i] += eps
-        in2 = @set flat_poly1[i] -= eps
+		h = fdiff_eps(flat_poly1[i])
+        in1 = @set flat_poly1[i] += h
+        in2 = @set flat_poly1[i] -= h
         out1 = poly_area(poly_intersection(in1, poly2))
         out2 = poly_area(poly_intersection(in2, poly2))
-        @reset grad1[i] = (out1 - out2) / (2 * eps)
+        @reset grad1[i] = (out1 - out2) / (2 * h)
     end
     return grad1
 end
 
-# ╔═╡ 5d9e020f-e35b-4325-8cc1-e2a2b3c246c9
-function compute_coarse_cell_contents(
-    coarse_cell::CoarseQuadCell{T,NS,NTAN},
-    sim::CellBasedEulerSim{T,TangentQuadCell{T,NS,NTAN}},
-    n,
-) where {T,NS,NTAN}
-    p = cell_boundary_polygon(coarse_cell)
-    contained = all_cells_contained_by(p, sim)
-    overlapped = all_cells_overlapping(p, sim)
-    T1 = SVector{4,T}
-    T2 = SMatrix{4,NS,T,NTAN}
-    T3 = SMatrix{4,8,T,32}
-    M =
-        sum(contained; init = zero(T1)) do id
-            _, cs = nth_step(sim, n)
-            return Euler2D.cell_volume(cs[id]) * cs[id].u
-        end + sum(overlapped; init = zero(T1)) do id
-            _, cs = nth_step(sim, n)
-            A = overlapping_cell_area(cs[id], coarse_cell)
-            return A * cs[id].u
-        end
-    dM_dp = sum(overlapped; init = zero(T3)) do id
-        _, cs = nth_step(sim, n)
-        p2 = cell_boundary_polygon(cs[id])
-        A = overlapping_cell_area(cs[id], coarse_cell)
-        dAdP = intersection_area_jacobian(p, p2)
-        return cs[id].u * dAdP'
-    end
-    Ṁ =
-        sum(contained; init = zero(T2)) do id
-            _, cs = nth_step(sim, n)
-            return Euler2D.cell_volume(cs[id]) * cs[id].u̇
-        end + sum(overlapped; init = zero(T2)) do id
-            _, cs = nth_step(sim, n)
-            A = overlapping_cell_area(cs[id], coarse_cell)
-            return A * cs[id].u̇
-        end
-    A, A_tangent = DifferentiationInterface.value_and_gradient(
-        poly_area,
-        poly_area_prep,
-        diff_backend,
-        p,
-    )
-    # unpack from mooncake
-    dA = SVector(A_tangent.fields.data...)
-    du_dp = (A * dM_dp - M * dA') / (A * A)
-    u, u̇ = (M, Ṁ) ./ A
-    return u, u̇, du_dp
-end
-
-# ╔═╡ 5d77d782-2def-4b3a-ab3a-118bf8e96b6b
-coarse_cells = let
-    d = copy(empty_coarse)
-    for c ∈ keys(d)
-        v1, v2, v3 = compute_coarse_cell_contents(d[c], sim_with_ad, 2)
-        @reset d[c].u = v1
-        @reset d[c].u̇ = v2
-        @reset d[c].du_dpts = v3
-    end
-    d
-end
-
-# ╔═╡ c6e3873e-7fef-4c38-bf3f-de71f866057f
-let
-    xc = body.center[1] .+ body.radius .* cos.(0:0.01:2π)
-    yc = body.center[2] .+ body.radius .* sin.(0:0.01:2π)
-    spys = range(-1.5, 1.5; length = 50)
-    spxs = x_shock.(spys)
-    p = plot(
-        spxs,
-        spys;
-        label = "Strong Shock Front (with extension)",
-        lw = 4,
-        legend = :outertopleft,
-    )
-    id = 0
-    maxdensity = maximum(coarse_cells) do (_, c)
-        c.u[1]
-    end
-    for (id, cell) ∈ coarse_cells
-        poly = cell.pts
-        pl = reduce(hcat, edge_starts(poly))
-        plot!(
-            p,
-            @view(pl[1, :]),
-            @view(pl[2, :]);
-            lw = 0.5,
-            fill = true,
-            fillalpha = (cell.u[1] / maxdensity),
-            label = false,
-            color = :red,
-            seriestype = :shape,
-        )
-        v = sum(eachcol(pl)) / 4
-        annotate!(p, v..., Plots.text(L"P_{%$id}", 8))
-    end
-    plot!(
-        p,
-        xc,
-        yc;
-        aspect_ratio = :equal,
-        xlims = (-2.05, 0.05),
-        ylims = (-0.2, 1.7),
-        label = "Blunt Body",
-        fill = true,
-        dpi = 1000,
-        size = (1760, 990),
-        ls = :dash,
-        lw = 4,
-        fillalpha = 0.5,
-    )
-    plot!(
-        p,
-        [-2.0, -0.75],
-        [0.0, 0.0];
-        color = :black,
-        label = "Symmetry Boundary",
-        lw = 2,
-        ls = :dash,
-    )
-    plot!(
-        p,
-        [-2.0, -2.0],
-        [0.0, 1.2];
-        color = :green,
-        label = "Inflow Boundary",
-        lw = 6,
-        ls = :dot,
-    )
-    plot!(
-        p,
-        [-2.0, 0.0, 0.0],
-        [1.2, 1.2, 0.75];
-        label = "v.N. Boundary",
-        lw = 6,
-        ls = :dashdot,
-        legendfontsize = 14,
-        color = :orange,
-    )
-    #savefig(p, "../gfx/silly_rectangles.pdf")
-    p
-end
-
-# ╔═╡ 60b9cd61-ed84-4f76-8bc8-a50672b83186
-md"""
-One might want to know if the coarse cells that match the free-stream conditions actually do so:
-"""
-
-# ╔═╡ 7b512325-5b2e-492b-9194-fa2dea3af333
-ambient_u̇ ≈ coarse_cells[2].u̇
-
-# ╔═╡ 008aaf79-dd82-4559-b1a6-dd49c0985975
-md"""
-And perhaps the relative error:
-"""
-
-# ╔═╡ f01eeab6-4e7a-469e-92f6-d0e992e3220e
-abs.(nondimensionalize(ambient, sim_scale) .- coarse_cells[2].u) ./
-nondimensionalize(ambient, sim_scale)
-
 # ╔═╡ 6aaf12a0-c2d9-48ab-9e13-94039cf95258
 md"""
-However, numerical viscosity or numerical dissipation may have affected things more strongly than we would like. Brief inspection reveals that the relative error in _front_ of the shock is around 10%.
+Numerical viscosity or numerical dissipation may have affected things more strongly than we would like. Brief inspection reveals that the relative error in _front_ of the shock is around 10%.
 
 A reasonable correction here is to fix the cell values in front of the shock to the free-stream values. We can evaluate the quality of this fix later.
 """
@@ -1050,63 +987,6 @@ const DUAL_NODE_TYPE = Tuple{
     Union{Nothing,SVector{4,Float64},CoarseQuadCell{Float64,3,12}},
 } where {S}
 
-# ╔═╡ 7e9ac0e4-37d7-41d0-98a7-7284634cb404
-coarse_dual = let
-    g = MetaGraph(DiGraph(), Int, DUAL_NODE_TYPE, Tuple{Symbol,Point{Float64},Point{Float64}})
-    g[1] = (DualNodeKind{:boundary_ambient}(), ambient_u)
-    for (k, v) ∈ coarse_cells
-        g[k] = (DualNodeKind{:cell}(), v)
-    end
-    phantom_idx = 1000 * nv(g) + 1
-    for (k1, v1) ∈ coarse_cells
-        for (k2, v2) ∈ coarse_cells
-            flag, val = are_coarse_neighbors(v1, v2)
-            if flag
-                g[k1, k2] = val
-            end
-        end
-
-        poly = cell_boundary_polygon(v1)
-        symy = PlanePolygons.Line(Point(-2.0, 0.0), Vec(1.0, 0.0))
-        inflow = PlanePolygons.Line(Point(-2.0, 0.0), Vec(0.0, 1.0))
-        vN1 = PlanePolygons.Line(Point(-2.0, 1.2), Vec(1.0, 0.0))
-        vN2 = PlanePolygons.Line(Point(0.0, 0.0), Vec(0.0, 1.0))
-
-        dirs = (:south, :west, :north, :east)
-        for (p1, p2, dir, t, n) ∈ zip(
-            edge_starts(poly),
-            edge_ends(poly),
-            dirs,
-            edge_tangents(poly),
-            outward_edge_normals(poly),
-        )
-            #if is_other_point_on_line(symy, p1) && is_other_point_on_line(symy, p2)
-            #	g[phantom_idx] = (DualNodeKind{:boundary_sym}(), nothing)
-            #	g[k1, phantom_idx] = (dir, p1, p2)
-            #	phantom_idx += 1
-            #else
-            if (p1[1] ≈ x_midleft(p1[2]) && p2[1] ≈ x_midleft(p2[2]))
-                g[k1, 1] = (dir, p1, p2)
-            elseif (
-                is_other_point_on_line(vN1, p1) && is_other_point_on_line(vN1, p2) ||
-                is_other_point_on_line(vN2, p1) && is_other_point_on_line(vN2, p2)
-            )
-                g[phantom_idx] = (DualNodeKind{:boundary_vN}(), nothing)
-                g[k1, phantom_idx] = (dir, p1, p2)
-                phantom_idx += 1
-            elseif (norm(p1) ≈ body.radius && norm(p2) ≈ body.radius)
-                g[phantom_idx] = (DualNodeKind{:boundary_body}(), nothing)
-                g[k1, phantom_idx] = (dir, p1, p2)
-                phantom_idx += 1
-            end
-        end
-    end
-    g
-end
-
-# ╔═╡ 1e40e0ee-341c-4e2d-ba79-a724b784db95
-neighbor_labels(coarse_dual, 19) |> collect
-
 # ╔═╡ 3a8cd7e2-fae9-4e70-8c92-004b17352506
 md"""
 ## Solving for ``\dot x``
@@ -1155,9 +1035,6 @@ This system can be transformed into Cartesian coordinates, since we only care ab
  - ``L`` is the vector of cell widths to the right of the shock
 """
 
-# ╔═╡ 9877d4e8-3d8e-401e-adb1-6ccb47863466
-
-
 # ╔═╡ 0a3a069c-e72c-4a47-9a11-00f049dc137c
 const _dirs_scale = map(b -> b ? -1 : 1, Euler2D._dirs_bc_is_reversed)
 
@@ -1200,12 +1077,6 @@ function _edge_basis(edge_data)
     ê1 = project_to_orthonormal_basis(SVector(1.0, 0.0), n̂)
     return L, n̂, t̂, ê1
 end
-
-# ╔═╡ aa059fd7-857c-4c51-af80-aaf1b95fd810
-
-
-# ╔═╡ 268fb334-afe6-438f-b420-7e3277390690
-
 
 # ╔═╡ cec776ee-f81d-4457-8555-24eaf80e4cca
 begin
@@ -1384,11 +1255,19 @@ begin
     end
 end
 
-# ╔═╡ 6212612b-9486-4e3d-a325-7b862078b63c
-
-
-# ╔═╡ 282e04e2-e96e-482e-95a9-8df913bc592a
-_compute_grad_ϕ_pts(coarse_dual[17]..., coarse_dual[18]..., coarse_dual[17, 18])
+# ╔═╡ 54a7d1a4-beca-4e35-83a4-bc8f20381529
+md"""
+### Plan to correct:
+1. Compute gradient in coarse cells correctly
+    - What is the appropriate approximation? Linear interpolation of the derivative?
+    - Deal with boundary conditions properly
+2. Compute the gradient of the boundary integral correctly.
+    - Replace with an exact Riemann solver instead of using HLL? How much error is acceptable?
+3. Nail down the process of "local pseudoinversion".
+    - If the current algebra is correct, which I think it is, fixing the gradient calcuations should work just fine
+    - If the current algebra is wrong... oh no
+4. What precisely constitutes an acceptable result?
+"""
 
 # ╔═╡ 4f79b51b-459a-46e1-a6d0-257ce08b029e
 function boundary_integral(dual, id)
@@ -1410,23 +1289,272 @@ function boundary_integral_ddu(dual, id)
     end
 end
 
-# ╔═╡ 0db3efc3-94c1-43a3-b3b9-4fa2b9000c6b
-neighbor_labels(coarse_dual, 17)
+# ╔═╡ 4902bd21-2d6f-4b8d-84fe-e669d3dcb327
+test_perturbation = [0., 1., 0.]
 
-# ╔═╡ 7090f3d7-2db2-4e74-ae8b-b8ca1d0e2d5c
-x_select = hcat(
-    SVector(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-    SVector(0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0),
-)
+# ╔═╡ 654863a5-9fc5-461a-b5ee-a2ffb2379888
+edge_lengths(poly) = (norm(a - b) for (a, b) ∈ zip(edge_ends(poly), edge_starts(poly)))
 
-# ╔═╡ 3ba4fd9d-822a-4a33-9116-10533a4e7281
-coarse_dual[177][2].du_dpts * x_select
+# ╔═╡ 6822601e-f40a-4fa1-a0f8-a8bb09809549
+# computes ∇_x u using a right-facing stencil in x and centered stencil in y
+# if we switch the solver to MUSCL2D, then we won't need this.
+# this is just a proof-of-concept
+function grad_x_u_at(sim, n, x, y)
+	(dx_max, dy_max) = 2 .* minimum_cell_size(sim)
+	window_x = (x-dx_max, x+dx_max)
+	window_y = (y-dy_max, y+dy_max)
+	_, cells = nth_step(sim, n)
+	i = findfirst(>=(x), cell_boundaries(sim, 1))
+	j = findfirst(>=(y), cell_boundaries(sim, 2))
+	slice1 = max(1,i-3):min(sim.ncells[1], i+2)
+	slice2 = max(1, j-3):min(sim.ncells[2], j+2)
+	in_window = @view sim.cell_ids[slice1, slice2]
+	cells_containing = Iterators.filter(in_window) do id
+		id == 0 && return false
+		p = cell_boundary_polygon(cells[id])
+		return PlanePolygons.point_inside(p, Point(x, y))	
+	end |> collect
+	# we know that we have rectangular cells
+	# in general this is not the case but I am not complaining
+	return (mapreduce(+, cells_containing; init=zero(SMatrix{4, 2, Float64, 8})) do id
+		cell = cells[id]
+		nbrs = Euler2D.neighbor_cells(cell, cells, boundary_conditions, DRY_AIR)
+		dudx = (nbrs.east.u - nbrs.west.u) / cell.extent[1]
+		dudy = (nbrs.north.u - nbrs.south.u) / cell.extent[2]
+		return hcat(dudx, dudy)
+	end / length(cells_containing))
+end
 
-# ╔═╡ e76d6a56-e88e-42c8-9148-d7d827dd58b9
-boundary_integral(coarse_dual, 17) + boundary_integral(coarse_dual, 31)
+# ╔═╡ 5d9e020f-e35b-4325-8cc1-e2a2b3c246c9
+function compute_coarse_cell_contents(
+    coarse_cell::CoarseQuadCell{T,NS,NTAN},
+    sim::CellBasedEulerSim{T,TangentQuadCell{T,NS,NTAN}},
+    n,
+) where {T,NS,NTAN}
+    p = cell_boundary_polygon(coarse_cell)
+    contained = all_cells_contained_by(p, sim)
+    overlapped = all_cells_overlapping(p, sim)
+    T1 = SVector{4,T}
+    T2 = SMatrix{4,NS,T,NTAN}
+    T3 = SMatrix{4,8,T,32}
+	# total cell mass
+    M = sum(contained; init = zero(T1)) do id
+            _, cs = nth_step(sim, n)
+            return Euler2D.cell_volume(cs[id]) * cs[id].u
+        end + tmapreduce(+, overlapped; init = zero(T1)) do id
+            _, cs = nth_step(sim, n)
+            A_union = overlapping_cell_area(cs[id], coarse_cell)
+            return A_union * cs[id].u
+        end
+	# dependence of cell mass on the larger polygon points
+	# only depends on cells that are overlapped not contained
+    dM_dp = tmapreduce(+, overlapped; init = zero(T3)) do id
+        _, cs = nth_step(sim, n)
+        p_cell = cell_boundary_polygon(cs[id])
+		p_union = poly_intersection(p, p_cell)
+        A_union = poly_area(p_union)
+		du = mapreduce(hcat, edge_starts(p_union)) do pt
+			grad_x_u_at(sim, n, pt...)
+		end
+		dxj = mapreduce(vcat, edge_starts(p_union)) do pt
+			intersection_point_jacobian(pt, p, p_union)
+		end
+        dAdxj = intersection_area_jacobian(p, p_cell) 
+        return cs[id].u * dAdxj' + A_union * du * dxj
+    end
+    Ṁ =
+        sum(contained; init = zero(T2)) do id
+            _, cs = nth_step(sim, n)
+            return Euler2D.cell_volume(cs[id]) * cs[id].u̇
+        end + tmapreduce(+,overlapped; init = zero(T2)) do id
+            _, cs = nth_step(sim, n)
+            A_union = overlapping_cell_area(cs[id], coarse_cell)
+            return A_union * cs[id].u̇
+        end
+    A_loc, A_tangent_loc = DifferentiationInterface.value_and_gradient(
+        poly_area,
+        poly_area_prep,
+        diff_backend,
+        p,
+    )
+    # unpack from mooncake
+    dA = SVector(A_tangent_loc.fields.data...)
+    du_dp = (A_loc * dM_dp - M * dA') / (A_loc * A_loc)
+    u, u̇ = (M, Ṁ) ./ A_loc
+    return u, u̇, du_dp
+end
 
-# ╔═╡ 44de7771-70d7-4b69-b1ec-cb5cd71071da
-boundary_integral(coarse_dual, 31) + boundary_integral(coarse_dual, 45)
+# ╔═╡ 5d77d782-2def-4b3a-ab3a-118bf8e96b6b
+coarse_cells = let
+    d = copy(empty_coarse)
+    for c ∈ keys(d)
+		needs_flip = all(edge_starts(cell_boundary_polygon(d[c]))) do pt
+			pt[2] ≤ 0.0
+		end
+		cell = d[c] 
+		if needs_flip
+			flipped = map(edge_starts(cell_boundary_polygon(d[c]))) do pt
+				return SVector(pt[1], -pt[2])
+			end
+			new_poly = SVector(flipped[4]..., flipped[3]..., flipped[2]..., flipped[1]...)
+			@reset cell.pts = new_poly
+		end
+        v1, v2, v3 = compute_coarse_cell_contents(cell, sim_with_ad, 6)
+        @reset cell.u = v1
+        @reset cell.u̇ = v2
+        @reset cell.du_dpts = v3
+		@reset cell.pts = d[c].pts
+		d[c] = cell
+    end
+	idxs = filter(keys(d)) do k
+		v = d[k]
+		return all(edge_starts(cell_boundary_polygon(v))) do pt
+			return pt[1] ≤ x_shock(pt[2])
+		end
+	end
+	foreach(idxs) do k
+		v = d[k]
+		@reset v.u = ambient_u
+		@reset v.u̇ = ambient_u̇
+		d[k] = v
+	end
+    d
+end
+
+# ╔═╡ c6e3873e-7fef-4c38-bf3f-de71f866057f
+let
+    xc = body.center[1] .+ body.radius .* cos.(0:0.01:2π)
+    yc = body.center[2] .+ body.radius .* sin.(0:0.01:2π)
+    spys = range(-0.25, 2.0; length = 20)
+    spxs = x_shock.(spys)
+    p = plot(
+        spxs,
+        spys;
+        label = "Strong Shock Front (with extension)",
+        lw = 4,
+        legend = :outertop,
+    )
+    id = 0
+    maxdensity = maximum(coarse_cells) do (_, c)
+        c.u[1]
+    end
+    for (id, cell) ∈ coarse_cells
+        poly = cell.pts
+        pl = reduce(hcat, edge_starts(poly))
+        plot!(
+            p,
+            @view(pl[1, :]),
+            @view(pl[2, :]);
+            lw = 0.5,
+            fill = true,
+            fillalpha = (cell.u[1] / maxdensity),
+            label = false,
+            color = :red,
+            seriestype = :shape,
+        )
+        v = sum(eachcol(pl)) / 4
+        annotate!(p, v..., Plots.text(L"%$id", 6))
+    end
+    plot!(
+        p,
+        xc,
+        yc;
+        aspect_ratio = :equal,
+        xlims = (-1.55, 0.05),
+        ylims = (-0.2, 2.2),
+        label = "Blunt Body",
+        fill = true,
+        dpi = 1000,
+        size = (800, 1200),
+        ls = :dash,
+        lw = 4,
+        fillalpha = 0.5,
+    )
+    plot!(
+        p,
+        [-1.5, -0.75],
+        [0.0, 0.0];
+        color = :black,
+        label = "Symmetry Boundary",
+        lw = 2,
+        ls = :dash,
+    )
+    plot!(
+        p,
+        [-1.5, -1.5],
+        [0.0, 2.0];
+        color = :green,
+        label = "Inflow Boundary",
+        lw = 6,
+        ls = :dot,
+    )
+    plot!(
+        p,
+        [-1.5, 0.0, 0.0],
+        [2.0, 2.0, 0.75];
+        label = "v.N. Boundary",
+        lw = 6,
+        ls = :dashdot,
+        legendfontsize = 14,
+        color = :orange,
+    )
+    #savefig(p, "../gfx/silly_rectangles.pdf")
+    p
+end
+
+# ╔═╡ 7e9ac0e4-37d7-41d0-98a7-7284634cb404
+coarse_dual = let
+    g = MetaGraph(DiGraph(), Int, DUAL_NODE_TYPE, Tuple{Symbol,Point{Float64},Point{Float64}})
+    g[1] = (DualNodeKind{:boundary_ambient}(), ambient_u)
+    for (k, v) ∈ coarse_cells
+        g[k] = (DualNodeKind{:cell}(), v)
+    end
+    phantom_idx = 10000 * nv(g) + 1
+    for (k1, v1) ∈ coarse_cells
+        for (k2, v2) ∈ coarse_cells
+            flag, val = are_coarse_neighbors(v1, v2)
+            if flag
+                g[k1, k2] = val
+            end
+        end
+
+        poly = cell_boundary_polygon(v1)
+        symy = PlanePolygons.Line(Point(-2.0, 0.0), Vec(1.0, 0.0))
+        inflow = PlanePolygons.Line(Point(-2.0, 0.0), Vec(0.0, 1.0))
+        vN1 = PlanePolygons.Line(Point(-2.0, 2.0), Vec(1.0, 0.0))
+        vN2 = PlanePolygons.Line(Point(0.0, 0.0), Vec(0.0, 1.0))
+
+        dirs = (:south, :west, :north, :east)
+        for (p1, p2, dir, t, n) ∈ zip(
+            edge_starts(poly),
+            edge_ends(poly),
+            dirs,
+            edge_tangents(poly),
+            outward_edge_normals(poly),
+        )
+            #if is_other_point_on_line(symy, p1) && is_other_point_on_line(symy, p2)
+            #	g[phantom_idx] = (DualNodeKind{:boundary_sym}(), nothing)
+            #	g[k1, phantom_idx] = (dir, p1, p2)
+            #	phantom_idx += 1
+            #else
+            if (p1[1] ≈ x_midleft(p1[2]) && p2[1] ≈ x_midleft(p2[2]))
+                g[k1, 1] = (dir, p1, p2)
+            elseif (
+                is_other_point_on_line(vN1, p1) && is_other_point_on_line(vN1, p2) ||
+                is_other_point_on_line(vN2, p1) && is_other_point_on_line(vN2, p2)
+            )
+                g[phantom_idx] = (DualNodeKind{:boundary_vN}(), nothing)
+                g[k1, phantom_idx] = (dir, p1, p2)
+                phantom_idx += 1
+            elseif (norm(p1) ≈ body.radius && norm(p2) ≈ body.radius)
+                g[phantom_idx] = (DualNodeKind{:boundary_body}(), nothing)
+                g[k1, phantom_idx] = (dir, p1, p2)
+                phantom_idx += 1
+            end
+        end
+    end
+    g
+end
 
 # ╔═╡ aa61b88c-417d-4598-96bb-3a1cb92fdb18
 function boundary_integral_ddparams(dual, id)
@@ -1436,72 +1564,145 @@ function boundary_integral_ddparams(dual, id)
     end
 end
 
-# ╔═╡ 5dd97bd2-dbd9-4aff-96a3-581f0ea9a94e
-A = boundary_integral_ddparams(coarse_dual, 17) # dG(x_s, p)/dp
+# ╔═╡ 6906c857-88ba-4914-8554-c721ad7e87fe
+begin
+	const x_select = hcat(
+    	SVector(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    	SVector(0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0),
+	);
+	function boundary_integral_ddL(dual, id) 
+		ddu = boundary_integral_ddu(dual, id)
+    	return sum(ddu) do (i, j, dϕ_dui, dϕ_duj)
+        	return (dϕ_dui * coarse_dual[i][2].du_dpts + dϕ_duj * coarse_dual[j][2].du_dpts) * x_select
+    	end
+	end
+end
+
+# ╔═╡ d0b579a8-38a4-45a9-b87b-7afa68fdb957
+function ξ_local_pseudoinversion(dual, id, ε)
+	A = boundary_integral_ddparams(dual, id)
+	@assert rank(A) == min(size(A)...)
+	B = boundary_integral_ddL(dual, id)
+	C = pinv(A)*B
+	return -C'*ε
+end
 
 # ╔═╡ 5383d7d3-b89e-4990-93d3-5548f3675738
-rank(A)
+rank(boundary_integral_ddparams(coarse_dual, 45)) # -dG(x_s, p)/dp
 
-# ╔═╡ 6906c857-88ba-4914-8554-c721ad7e87fe
-function boundary_integral_ddL(dual, id) 
-	ddu = boundary_integral_ddu(dual, id)
-    return sum(ddu) do (i, j, dϕ_dui, dϕ_duj)
-        return (dϕ_dui * coarse_dual[i][2].du_dpts + dϕ_duj * coarse_dual[j][2].du_dpts) * x_select
-    end
+# ╔═╡ 0a7ea098-0fc8-4dc5-863e-ce91dc044b66
+ξ_local_pseudoinversion(coarse_dual, 19, test_perturbation)
+
+# ╔═╡ 0d04c757-5137-4683-b203-99819f70b84f
+md"""
+## Solving R-H
+"""
+
+# ╔═╡ 9c57268a-8d3d-4bfe-a565-2e78f8998c2f
+
+
+# ╔═╡ cdbc037e-d542-47be-b78e-b396c5c3d8df
+md"""
+## Figures
+"""
+
+# ╔═╡ 69ef8869-182e-44ec-8fd4-cbc36fcb671b
+let
+	behind_shock_cells = (filter(keys(coarse_cells)) do k
+		v = coarse_cells[k]
+		pts = (edge_starts(cell_boundary_polygon(v)) |> collect)[[2, 3]]
+		return all(p -> p[1] == x_shock(p[2]), pts)
+	end |> collect |> sort)[2:end-1]
+	infos = mapreduce(vcat, behind_shock_cells) do id
+		sum(ξ_local_pseudoinversion(coarse_dual, id, [1., 0., 0.]))/2
+	end
+	infos2 = mapreduce(vcat, behind_shock_cells) do id
+		sum(ξ_local_pseudoinversion(coarse_dual, id, [0., 1., 0.]))/2
+	end
+	v1 = 2.0/64
+	ss = (range(-v1, 2.; length=length(infos)+1) .+ v1/2)[1:end-1]
+	p1 = plot(ss, clamp.(infos, -100.0, 100.0), label=L"\xi_1(y)")
+	p2 = plot(ss, clamp.(infos2, -100.0, 100.0), label=L"\xi_2(y)")
+	plot(p1, p2, size=(900, 450), dpi=600)
 end
 
-# ╔═╡ ce7cb133-f7ce-496f-84c3-1a1974ea820e
-B = boundary_integral_ddL(coarse_dual, 17) # dG(x_s, p)/ dx_s
-
-# ╔═╡ 5194d358-b195-462b-b34b-5ccd95c9d0de
-(pinv(A) * B)
-
-# ╔═╡ 888b0fb7-2eb4-4201-8c24-e29bd98479eb
-(pinv(A) * B)' * [0.0, 0.01, 0.0]
-
-# ╔═╡ d32ec517-bff1-4f07-9a92-b447f1313d91
-(pinv(A) * B)' * [0.01, 0.0, 0.0]
-
-# ╔═╡ 654863a5-9fc5-461a-b5ee-a2ffb2379888
-edge_lengths(poly) = (norm(a - b) for (a, b) ∈ zip(edge_ends(poly), edge_starts(poly)))
-
-# ╔═╡ d03539c5-b80d-4d43-adcd-134147468052
-coarse_dual[3][2].u
-
-# ╔═╡ 3b8e7b5f-c262-4820-aaba-4f2d763fc5c1
-s1 = ShockwaveProperties.state_behind(
-    ambient,
-    SVector(-1.0, 0.0),
-    SVector(0.0, 1.0),
-    DRY_AIR,
-)
-
-# ╔═╡ 6822601e-f40a-4fa1-a0f8-a8bb09809549
-# computes ∇_x u using a right-facing stencil in x and centered stencil in y
-# if we switch the solver to MUSCL2D, then we won't need this.
-# this is just a proof-of-concept
-function grad_x_u_at(sim, n, x, y)
-    _, cells = nth_step(sim, n)
-    bx, by = cell_boundaries(sim)
-    i = findfirst(>=(x), bx) - 1
-    j = findfirst(>=(y), by) - 1
-    cx1 = cells[sim.cell_ids[i, j]]
-    @assert PlanePolygons.point_inside(cell_boundary_polygon(cx1), Point(x, y))
-    cx2 = cells[sim.cell_ids[i+1, j]]
-    dudx = (cx2.u - cx1.u) / (cx1.extent[1] / 2 + cx2.extent[1] / 2)
-    cy1 = cells[sim.cell_ids[i, j-1]]
-    cy2 = cells[sim.cell_ids[i, j+1]]
-    dudy = (cy2.u - cy1.u) / (cy1.extent[2] / 2 + cx1.extent[2] + cy2.extent[2] / 2)
-    return hcat(dudx, dudy)
+# ╔═╡ ae7bca74-2a14-4a62-b6e9-669260fa4011
+let
+	f(y) = BilligShockParametrization.shock_front(y, ambient_primitives[2], 0.75)[1]
+	y = 0.:0.01:2.0
+	y2 = 0.:0.05:2.0
+	x = f.(y)
+	p = plot(x, y, label="Billig")
+	plot!(p, x_shock.(y2), y2, label="Extracted")
 end
+
+# ╔═╡ b2840f27-70da-4d5a-a8f1-2ebcb7db2896
+let
+	ε = 0.001
+	behind_shock_cells = (filter(keys(coarse_cells)) do k
+		v = coarse_cells[k]
+		pts = (edge_starts(cell_boundary_polygon(v)) |> collect)[[2, 3]]
+		return all(p -> p[1] == x_shock(p[2]), pts)
+	end |> collect |> sort)[2:end-1]
+	infos_temp = mapreduce(vcat, behind_shock_cells) do id
+		ξ_local_pseudoinversion(coarse_dual, id, [0., ε, 0.])
+	end
+	infos = (infos_temp[1:2:end] + infos_temp[2:2:end]) ./ 2
+	info_ys = map(behind_shock_cells) do k
+		v = coarse_cells[k]
+		pts = reduce(hcat, edge_starts(cell_boundary_polygon(v)))
+		return sum(pts'[2:3, 2]) / 2
+	end
+	f(y) = BilligShockParametrization.shock_front(y, ambient_primitives[2], 0.75)[1]
+	df(y) = begin
+		ForwardDiff.derivative(ambient_primitives[2]) do M
+			BilligShockParametrization.shock_front(y, M, 0.75)[1]
+		end
+	end
+	y = 0.:0.01:2.0
+	y2 = 0.:0.05:2.0
+	x = f.(y)
+	p = plot(x, y, label="Billig "*L"(M=4.0)", title="Local Pseudoinversion; "*L"N_{coarse}=%$(num_coarse_cells_pos_y),\varepsilon=%$(ε)")
+	@show length(infos), length(info_ys)
+	plot!(p, x .+ ε .* df.(y), y, label="Billig "*L"(M = 4.0+\varepsilon)")
+	plot!(p, x_shock.(y2), y2, label="Extracted via Shock Sensor")
+	plot!(p, x_shock.(info_ys) .+ infos, info_ys, label="Extracted + Perturbation", marker=:circ)
+	savefig(p, "../gfx/local_pseudoninversion_Ny$(num_coarse_cells_pos_y)eps$(ε)cellwidth$(cell_width_at_shock).pdf")
+	p
+end
+
+# ╔═╡ a24be473-d2cd-46eb-bbab-0fb9766cbfae
+md"""
+- Find an explanation for the differing magnitudes of xi and d(billig)/dm
+- Plot comparisons against Billig and (when available) against other grid sizes
+- Parameter study on xi: does the oscillation in xi change if the grid size changes? (only need to coarsen)
+"""
 
 # ╔═╡ 1f174634-812d-4704-8e82-36935e8f0cb5
 md"""
 ## Debug GFX and Information
 """
 
+# ╔═╡ 273dade2-9bda-46d1-945d-70fc42f9bb1c
+ξ_local_pseudoinversion(coarse_dual, 172, I)
+
+# ╔═╡ b0a62334-fc75-4c51-b637-03c606f49910
+let
+	x = -1.5:0.01:-0.75
+	y = 1
+end
+
+# ╔═╡ 256e1cef-2145-4ff8-bee1-d18bcd3ad75a
+let
+	polyA = SVector(0., 0., 0., 1., 1., 0.)
+	polyB = SVector(0.5, -0.5, 0.5, 1., 1.5, 1., 1.5, -0.5)
+	polyC = poly_intersection(polyA, polyB)
+	J = intersection_point_jacobian(SVector(0.5, 0.5), polyB, polyA)
+	(J, J*[0., 1., 0., 0., 0., 0., 0., 0.])
+end
+
 # ╔═╡ 48148c30-486b-4952-9c5f-aea722ff74cf
-@bind n_cell Slider(2:80)
+@bind n_cell Slider(31:145)
 
 # ╔═╡ 8f36cc9d-c2c5-4bea-9dc7-e5412a2960f9
 let
@@ -1555,6 +1756,20 @@ let
     scatter!(p, data[:, 1], data[:, 2]; marker = :x, ms = 2, label = false)
     p
 end
+
+# ╔═╡ 752ab770-eb30-4e3f-ba85-304b977aea02
+coarse_dual[31][2].du_dpts * [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+# ╔═╡ b943979b-ed0d-45e1-b4fa-b3ab2f6a4acb
+mapreduce(hcat, [(-1.0, 0.01), (-1.0, 0.02)]) do pt
+	grad_x_u_at(sim_with_ad, 6, pt...)
+end
+
+# ╔═╡ 768fa7ca-a8a3-49fc-ad6b-c47e68e71237
+heatmap(-1.25:0.01:-0.75, 0.0:0.01:1.0, (x, y)->grad_x_u_at(sim_with_ad, 6, x, y)[1,1])
+
+# ╔═╡ 2501fa77-dadb-428d-b98d-58b050e21a7d
+heatmap(-1.25:0.01:-0.75, 0.0:0.01:1.0, (x, y)->grad_x_u_at(sim_with_ad, 6, x, y)[1,2])
 
 # ╔═╡ 5b7a3783-ef40-468f-93ac-91cb46929bd6
 ne(coarse_dual)
@@ -1658,6 +1873,7 @@ LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 MetaGraphsNext = "fa8bd995-216d-47f1-8a91-f3b68fbeb377"
 Mooncake = "da2b9cff-9c12-43a0-ae48-6db2b0edb7d6"
+OhMyThreads = "67456a42-1dca-4109-a031-0a68de7e3ad5"
 PlanePolygons = "f937978b-597e-4162-b50e-ad07b6cf7ab2"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
@@ -1676,6 +1892,7 @@ Interpolations = "~0.15.1"
 LaTeXStrings = "~1.4.0"
 MetaGraphsNext = "~0.7.3"
 Mooncake = "~0.4.118"
+OhMyThreads = "~0.8.3"
 PlanePolygons = "~0.1.12"
 Plots = "~1.40.13"
 PlutoUI = "~0.7.62"
@@ -1690,7 +1907,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.5"
 manifest_format = "2.0"
-project_hash = "a675d8ed3f02da467ac1be2b238ff59de18edb18"
+project_hash = "a74a1ff9a38867efb2f9181362a4afeb0b1ce8d0"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "e2478490447631aedba0823d4d7a80b2cc8cdb32"
@@ -1774,6 +1991,28 @@ git-tree-sha1 = "01b8ccb13d68535d73d2b0c23e39bd23155fb712"
 uuid = "13072b0f-2c55-5437-9ae7-d433b7a33950"
 version = "1.1.0"
 
+[[deps.BangBang]]
+deps = ["Accessors", "ConstructionBase", "InitialValues", "LinearAlgebra"]
+git-tree-sha1 = "26f41e1df02c330c4fa1e98d4aa2168fdafc9b1f"
+uuid = "198e06fe-97b7-11e9-32a5-e1d131e6ad66"
+version = "0.4.4"
+
+    [deps.BangBang.extensions]
+    BangBangChainRulesCoreExt = "ChainRulesCore"
+    BangBangDataFramesExt = "DataFrames"
+    BangBangStaticArraysExt = "StaticArrays"
+    BangBangStructArraysExt = "StructArrays"
+    BangBangTablesExt = "Tables"
+    BangBangTypedTablesExt = "TypedTables"
+
+    [deps.BangBang.weakdeps]
+    ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+    DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+    StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+    StructArrays = "09ab397b-f2b6-538f-b94a-2f83cf4a842a"
+    Tables = "bd369af6-aec1-5ad0-b16a-f7cc5008161c"
+    TypedTables = "9d95f2ec-7b3d-5a63-8d20-e2491e220bb9"
+
 [[deps.Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 version = "1.11.0"
@@ -1810,6 +2049,11 @@ weakdeps = ["SparseArrays"]
 
     [deps.ChainRulesCore.extensions]
     ChainRulesCoreSparseArraysExt = "SparseArrays"
+
+[[deps.ChunkSplitters]]
+git-tree-sha1 = "63a3903063d035260f0f6eab00f517471c5dc784"
+uuid = "ae650224-84b6-46f8-82ea-d812ca08434e"
+version = "3.1.2"
 
 [[deps.CodecZlib]]
 deps = ["TranscodingStreams", "Zlib_jll"]
@@ -2175,6 +2419,11 @@ git-tree-sha1 = "55c53be97790242c29031e5cd45e8ac296dadda3"
 uuid = "2e76f6c2-a576-52d4-95c1-20adfe4de566"
 version = "8.5.0+0"
 
+[[deps.HashArrayMappedTries]]
+git-tree-sha1 = "2eaa69a7cab70a52b9687c8bf950a5a93ec895ae"
+uuid = "076d061b-32b6-4027-95e0-9a2c6f6d7e74"
+version = "0.2.0"
+
 [[deps.Hyperscript]]
 deps = ["Test"]
 git-tree-sha1 = "179267cfa5e712760cd43dcae385d7ea90cc25a4"
@@ -2197,6 +2446,11 @@ version = "0.2.5"
 git-tree-sha1 = "d1b1b796e47d94588b3757fe84fbf65a5ec4a80d"
 uuid = "d25df0c9-e2be-5dd7-82c8-3ad0b3e990b9"
 version = "0.1.5"
+
+[[deps.InitialValues]]
+git-tree-sha1 = "4da0f88e9a39111c2fa3add390ab15f3a44f3ca3"
+uuid = "22cec73e-a1b8-11e9-2c92-598750a2cf9c"
+version = "0.3.1"
 
 [[deps.InteractiveUtils]]
 deps = ["Markdown"]
@@ -2517,6 +2771,16 @@ git-tree-sha1 = "887579a3eb005446d514ab7aeac5d1d027658b8f"
 uuid = "e7412a2a-1a6e-54c0-be00-318e2571c051"
 version = "1.3.5+1"
 
+[[deps.OhMyThreads]]
+deps = ["BangBang", "ChunkSplitters", "ScopedValues", "StableTasks", "TaskLocalValues"]
+git-tree-sha1 = "e0a1a8b92f6c6538b2763196f66417dddb54ac0c"
+uuid = "67456a42-1dca-4109-a031-0a68de7e3ad5"
+version = "0.8.3"
+weakdeps = ["Markdown"]
+
+    [deps.OhMyThreads.extensions]
+    MarkdownExt = "Markdown"
+
 [[deps.OpenBLAS_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
 uuid = "4536629a-c528-5b80-bd46-f80d51c5b363"
@@ -2741,6 +3005,12 @@ version = "1.3.1"
 uuid = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 version = "0.7.0"
 
+[[deps.ScopedValues]]
+deps = ["HashArrayMappedTries", "Logging"]
+git-tree-sha1 = "1147f140b4c8ddab224c94efa9569fc23d63ab44"
+uuid = "7e506255-f358-4e82-b7e4-beb19740aa63"
+version = "1.3.0"
+
 [[deps.Scratch]]
 deps = ["Dates"]
 git-tree-sha1 = "3bac05bc7e74a75fd9cba4295cde4045d9fe2386"
@@ -2815,6 +3085,11 @@ deps = ["Random"]
 git-tree-sha1 = "95af145932c2ed859b63329952ce8d633719f091"
 uuid = "860ef19b-820b-49d6-a774-d7a799459cd3"
 version = "1.0.3"
+
+[[deps.StableTasks]]
+git-tree-sha1 = "c4f6610f85cb965bee5bfafa64cbeeda55a4e0b2"
+uuid = "91464d47-22a1-43fe-8b7f-2d57ee82463f"
+version = "0.1.7"
 
 [[deps.StaticArrays]]
 deps = ["LinearAlgebra", "PrecompileTools", "Random", "StaticArraysCore"]
@@ -2909,6 +3184,11 @@ version = "1.12.0"
 deps = ["ArgTools", "SHA"]
 uuid = "a4e569a6-e804-4fa4-b0f3-eef7a1d5b13e"
 version = "1.10.0"
+
+[[deps.TaskLocalValues]]
+git-tree-sha1 = "d155450e6dff2a8bc2fcb81dcb194bd98b0aeb46"
+uuid = "ed4db957-447d-4319-bfb6-7fa9ae7ecf34"
+version = "0.1.2"
 
 [[deps.TensorCore]]
 deps = ["LinearAlgebra"]
@@ -3291,6 +3571,7 @@ version = "1.8.1+0"
 # ╔═╡ Cell order:
 # ╠═6f1542ea-a747-11ef-2466-fd7f67d1ef2c
 # ╠═2e9dafda-a95c-4277-9a7c-bc80d97792f0
+# ╠═15c5d10c-4d9a-4f57-a8fd-b65a970ac73c
 # ╠═f5fd0c28-99a8-4c44-a5e4-d7b24e43482c
 # ╟─e7001548-a4b4-4709-b10c-0633a11bd624
 # ╟─c87b546e-8796-44bf-868c-b2d3ad340aa1
@@ -3306,6 +3587,7 @@ version = "1.8.1+0"
 # ╟─e55363f4-5d1d-4837-a30f-80b0b9ae7a8e
 # ╟─d832aeb4-42d6-4b72-88ee-4cdd702a4f48
 # ╠═90bf50cf-7254-4de8-b860-938430e121a9
+# ╠═fffcb684-9b58-43d7-850a-532c609c5389
 # ╟─33e635b3-7c63-4b91-a1f2-49da93307f29
 # ╠═4dc7eebf-48cc-4474-aef0-0cabf1d8eda5
 # ╟─8bd1c644-1690-46cf-ac80-60654fc6d8c0
@@ -3315,32 +3597,35 @@ version = "1.8.1+0"
 # ╠═cc53f78e-62f5-4bf8-bcb3-5aa72c5fde99
 # ╠═2e3b9675-4b66-4623-b0c4-01acdf4e158c
 # ╟─d5db89be-7526-4e6d-9dec-441f09606a04
-# ╠═4e9fb962-cfaa-4650-b50e-2a6245d4bfb4
-# ╠═bcdd4862-ac68-4392-94e2-30b1456d411a
+# ╟─4e9fb962-cfaa-4650-b50e-2a6245d4bfb4
+# ╟─bcdd4862-ac68-4392-94e2-30b1456d411a
 # ╟─e2bdc923-53e6-4a7d-9621-4d3b356a6e41
 # ╟─44ff921b-09d0-42a4-8852-e911212924f9
 # ╟─4f8b4b5d-58de-4197-a676-4090912225a1
+# ╟─6e4d2f60-3c40-4a2b-be2b-8c4cc40fb911
 # ╟─706146ae-3dbf-4b78-9fcc-e0832aeebb28
 # ╟─9b6ab300-6434-4a96-96be-87e30e35111f
 # ╟─21cbdeec-3438-4809-b058-d23ebafc9ee2
 # ╟─90ff1023-103a-4342-b521-e229157001fc
 # ╟─5c0be95f-3c4a-4062-afeb-3c1681cae549
 # ╟─88889293-9afc-4540-a2b9-f30afb62b1de
-# ╟─6da05b47-9763-4d0c-99cc-c945630c770d
+# ╠═6da05b47-9763-4d0c-99cc-c945630c770d
 # ╟─351d4e18-4c95-428e-a008-5128f547c66d
+# ╠═a974c692-5171-4049-95aa-def2c776061b
+# ╠═4db61526-1e3a-47ac-8e2f-66634c3947c2
 # ╟─bc0c6a41-adc8-4d18-9574-645704f54b72
 # ╟─4a5086bc-5c36-4e71-9d3a-8f77f48a90f9
 # ╠═747f0b67-546e-4222-abc8-2007daa3f658
 # ╠═2cb33e16-d735-4e60-82a5-aa22da0288fb
 # ╠═4b036b02-1089-4fa8-bd3a-95659c9293cd
 # ╟─24da34ca-04cd-40ae-ac12-c342824fa26e
+# ╟─9ac61e80-7d6a-40e8-8254-ee306f8248c3
 # ╟─92044a9f-2078-48d1-8181-34be87b03c4c
 # ╟─5268fe37-b827-42ad-9977-6efbf4ecfad1
 # ╟─e98df040-ac22-4184-95dd-a8635ab72af6
 # ╠═31009964-3f32-4f97-8e4a-2b95be0f0037
 # ╠═4d202323-e1a9-4b24-b98e-7d17a6cc144f
-# ╠═b34a8bfd-5aba-459e-bf05-47d0225b7075
-# ╠═95947312-342f-44b3-90ca-bd8ad8204e18
+# ╟─95947312-342f-44b3-90ca-bd8ad8204e18
 # ╟─eb5a2dc6-9c7e-4099-a564-15f1cec11caa
 # ╟─9c601619-aaf1-4f3f-b2e2-10422d8ac640
 # ╟─e0a934d6-3962-46d5-b172-fb970a537cc0
@@ -3348,9 +3633,10 @@ version = "1.8.1+0"
 # ╠═be8ba02d-0d31-4720-9e39-595b549814cc
 # ╟─a1dc855f-0b24-4373-ba00-946719d38d95
 # ╟─93043797-66d1-44c3-b8bb-e17deac70cfa
+# ╠═0511fbcd-8b44-481c-a176-c0657b6557c2
 # ╠═7468fbf2-aa57-4505-934c-baa4dcb646fc
 # ╟─50a46d6d-deb7-4ad0-867a-4429bf55632f
-# ╟─766b440b-0001-4037-8959-c0b7f04d999e
+# ╠═766b440b-0001-4037-8959-c0b7f04d999e
 # ╟─d44322b1-c67f-4ee8-b168-abac75fb42a1
 # ╟─2f088a0c-165e-47f9-aaeb-6e4ab31c9d26
 # ╟─24fa22e6-1cd0-4bcb-bd6d-5244037e58e2
@@ -3362,9 +3648,10 @@ version = "1.8.1+0"
 # ╟─bfe8cb7d-8e5e-4dda-88cb-356b34017335
 # ╟─dea032e2-bf23-42da-8dac-d3368c2bdec6
 # ╟─fc646016-a30e-4c60-a895-2dde771f79cb
-# ╟─54ed2abb-81bb-416c-b7be-1125e41622f5
+# ╠═54ed2abb-81bb-416c-b7be-1125e41622f5
 # ╟─c6e3873e-7fef-4c38-bf3f-de71f866057f
 # ╟─435887e7-1870-4677-a09d-020be5761039
+# ╟─61945d45-03f4-4401-8b18-3d11420047d0
 # ╟─729ebc48-bba1-4858-8369-fcee9f133ee0
 # ╟─5cffaaf5-9a5e-4839-a056-30e238308c51
 # ╟─f252b8d0-f067-468b-beb3-ff6ecaeca722
@@ -3374,61 +3661,60 @@ version = "1.8.1+0"
 # ╟─f30619a3-5344-4e81-a4b5-6a11100cd056
 # ╟─6c2b1a68-dd43-4449-9dc7-4b7849081cc3
 # ╠═37eb63be-507a-475f-a6f6-8606917b8561
-# ╟─5d9e020f-e35b-4325-8cc1-e2a2b3c246c9
+# ╠═a968296a-43c1-48f3-b4b8-0d81cb162b7b
+# ╠═5d9e020f-e35b-4325-8cc1-e2a2b3c246c9
+# ╟─6f303343-1f76-46f9-80e8-2dd4ae1b5427
 # ╟─d87e0bb8-317e-4d48-8008-a7071c74ab31
 # ╟─5d77d782-2def-4b3a-ab3a-118bf8e96b6b
-# ╟─60b9cd61-ed84-4f76-8bc8-a50672b83186
-# ╟─7b512325-5b2e-492b-9194-fa2dea3af333
-# ╟─008aaf79-dd82-4559-b1a6-dd49c0985975
-# ╠═f01eeab6-4e7a-469e-92f6-d0e992e3220e
 # ╟─6aaf12a0-c2d9-48ab-9e13-94039cf95258
 # ╟─5c2db847-a2ec-4d36-bdf7-7ad2393f67f3
 # ╠═0679a676-57fa-45ee-846d-0a8961562db3
 # ╟─d19fff76-e645-4d9d-9989-50019b6356ad
 # ╟─0e0a049b-e2c3-4fe9-8fb8-186cdeb60485
 # ╠═fd9b689f-275c-4c91-9b6c-4e63c68d6ab2
-# ╠═ead8c1a5-9f4e-4d92-b4ca-1650ad34bdca
+# ╟─ead8c1a5-9f4e-4d92-b4ca-1650ad34bdca
 # ╟─7e9ac0e4-37d7-41d0-98a7-7284634cb404
-# ╠═1e40e0ee-341c-4e2d-ba79-a724b784db95
 # ╟─3a8cd7e2-fae9-4e70-8c92-004b17352506
 # ╟─b88373c7-fe33-4373-b4ea-036688c0114c
-# ╠═9877d4e8-3d8e-401e-adb1-6ccb47863466
 # ╠═e4b54bd3-5fa9-4291-b2a4-6b10c494ce34
 # ╠═0a3a069c-e72c-4a47-9a11-00f049dc137c
-# ╠═8a76792c-6189-4d39-9147-5a7ea9b074f9
-# ╠═fd73e7b8-5887-4fee-9d8c-c8df45e54d11
-# ╠═caa666e2-73fe-435e-a136-dc7fdcff03eb
-# ╠═63c1d6d9-ad64-4074-83c4-40b5df0e0b1f
-# ╠═aa059fd7-857c-4c51-af80-aaf1b95fd810
-# ╠═268fb334-afe6-438f-b420-7e3277390690
+# ╟─8a76792c-6189-4d39-9147-5a7ea9b074f9
+# ╟─fd73e7b8-5887-4fee-9d8c-c8df45e54d11
+# ╟─caa666e2-73fe-435e-a136-dc7fdcff03eb
+# ╟─63c1d6d9-ad64-4074-83c4-40b5df0e0b1f
 # ╟─cec776ee-f81d-4457-8555-24eaf80e4cca
 # ╟─df5a5737-41e7-447d-ad5f-ebdbf07996ca
-# ╠═3c835380-3580-4881-a0ad-e466eb99fcb8
+# ╟─3c835380-3580-4881-a0ad-e466eb99fcb8
 # ╠═f3209f08-0d0c-4810-bf9b-86f2323799b4
-# ╠═6212612b-9486-4e3d-a325-7b862078b63c
-# ╠═282e04e2-e96e-482e-95a9-8df913bc592a
+# ╟─54a7d1a4-beca-4e35-83a4-bc8f20381529
 # ╠═4f79b51b-459a-46e1-a6d0-257ce08b029e
 # ╠═03f640b6-851c-4c57-9ff8-5549415b558b
-# ╠═0db3efc3-94c1-43a3-b3b9-4fa2b9000c6b
-# ╠═7090f3d7-2db2-4e74-ae8b-b8ca1d0e2d5c
-# ╠═3ba4fd9d-822a-4a33-9116-10533a4e7281
-# ╠═e76d6a56-e88e-42c8-9148-d7d827dd58b9
-# ╠═44de7771-70d7-4b69-b1ec-cb5cd71071da
-# ╠═5dd97bd2-dbd9-4aff-96a3-581f0ea9a94e
-# ╠═5383d7d3-b89e-4990-93d3-5548f3675738
-# ╠═ce7cb133-f7ce-496f-84c3-1a1974ea820e
-# ╠═5194d358-b195-462b-b34b-5ccd95c9d0de
-# ╠═888b0fb7-2eb4-4201-8c24-e29bd98479eb
-# ╠═d32ec517-bff1-4f07-9a92-b447f1313d91
 # ╠═aa61b88c-417d-4598-96bb-3a1cb92fdb18
 # ╠═6906c857-88ba-4914-8554-c721ad7e87fe
+# ╠═5383d7d3-b89e-4990-93d3-5548f3675738
+# ╠═d0b579a8-38a4-45a9-b87b-7afa68fdb957
+# ╠═4902bd21-2d6f-4b8d-84fe-e669d3dcb327
+# ╠═0a7ea098-0fc8-4dc5-863e-ce91dc044b66
 # ╠═654863a5-9fc5-461a-b5ee-a2ffb2379888
-# ╠═d03539c5-b80d-4d43-adcd-134147468052
-# ╠═3b8e7b5f-c262-4820-aaba-4f2d763fc5c1
-# ╠═6822601e-f40a-4fa1-a0f8-a8bb09809549
+# ╟─6822601e-f40a-4fa1-a0f8-a8bb09809549
+# ╠═0d04c757-5137-4683-b203-99819f70b84f
+# ╠═9c57268a-8d3d-4bfe-a565-2e78f8998c2f
+# ╟─cdbc037e-d542-47be-b78e-b396c5c3d8df
+# ╠═e5036dd3-9070-4521-9d7d-e0293b967d78
+# ╠═69ef8869-182e-44ec-8fd4-cbc36fcb671b
+# ╠═ae7bca74-2a14-4a62-b6e9-669260fa4011
+# ╠═b2840f27-70da-4d5a-a8f1-2ebcb7db2896
+# ╟─a24be473-d2cd-46eb-bbab-0fb9766cbfae
 # ╟─1f174634-812d-4704-8e82-36935e8f0cb5
+# ╠═273dade2-9bda-46d1-945d-70fc42f9bb1c
+# ╠═b0a62334-fc75-4c51-b637-03c606f49910
+# ╠═256e1cef-2145-4ff8-bee1-d18bcd3ad75a
 # ╟─8f36cc9d-c2c5-4bea-9dc7-e5412a2960f9
 # ╠═48148c30-486b-4952-9c5f-aea722ff74cf
+# ╠═752ab770-eb30-4e3f-ba85-304b977aea02
+# ╠═b943979b-ed0d-45e1-b4fa-b3ab2f6a4acb
+# ╠═768fa7ca-a8a3-49fc-ad6b-c47e68e71237
+# ╠═2501fa77-dadb-428d-b98d-58b050e21a7d
 # ╠═5b7a3783-ef40-468f-93ac-91cb46929bd6
 # ╠═74525445-19f6-471f-878e-a60f07ba9f01
 # ╠═d8bfb40f-f304-41b0-9543-a4b10e95d182
