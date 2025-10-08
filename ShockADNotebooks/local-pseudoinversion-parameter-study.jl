@@ -1,6 +1,14 @@
 ### A Pluto.jl notebook ###
 # v0.20.19
 
+#> [frontmatter]
+#> language = "en-US"
+#> title = "Local Pseudoinversion: Parameter Study"
+#> date = "2025-10-08"
+#> 
+#>     [[frontmatter.author]]
+#>     name = "Alexander Fleming"
+
 using Markdown
 using InteractiveUtils
 
@@ -42,9 +50,6 @@ end
 
 # ╔═╡ 777acab3-402a-406b-afae-fd56c76ad42d
 using Interpolations: scale, BSpline, Linear, interpolate, Interpolations
-
-# ╔═╡ f6636955-df53-44cf-b945-5a1753aa5a2a
-using SimpleNonlinearSolve
 
 # ╔═╡ 95dd1578-6475-4fe7-858d-846630ac0b54
 PlutoUI.TableOfContents(aside=false)
@@ -787,7 +792,6 @@ PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 ShockwaveProperties = "77d2bf28-a3e9-4b9c-9fcf-b85f74cc8a50"
 SimpleIntegration = "f1de6737-2331-4f40-83c2-33cf2af9fc78"
-SimpleNonlinearSolve = "727e6d20-b764-4bd8-a329-72de5adea6c7"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
@@ -806,7 +810,6 @@ Plots = "~1.41.1"
 PlutoUI = "~0.7.71"
 ShockwaveProperties = "~0.2.6"
 SimpleIntegration = "~0.1.1"
-SimpleNonlinearSolve = "~2.9.0"
 StaticArrays = "~1.9.15"
 Unitful = "~1.25.0"
 """
@@ -817,7 +820,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.7"
 manifest_format = "2.0"
-project_hash = "43ac89e8e517dd19bfcb09b70d294ad03cd77ac8"
+project_hash = "8d7a8665ac524a5aed3aa33e16dc3c88aa040ea2"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "27cecae79e5cc9935255f90c53bb831cc3c870d7"
@@ -2854,7 +2857,6 @@ version = "1.9.2+0"
 # ╠═7fde6567-ead7-4074-8d26-20e128ca6c51
 # ╠═34a158e2-8e73-11f0-0005-254000c6e719
 # ╠═777acab3-402a-406b-afae-fd56c76ad42d
-# ╠═f6636955-df53-44cf-b945-5a1753aa5a2a
 # ╟─95dd1578-6475-4fe7-858d-846630ac0b54
 # ╟─fb198cb0-3311-452a-8281-dbd22ac84698
 # ╟─246be280-b813-4e17-b33e-c13327882c3e
@@ -2897,7 +2899,7 @@ version = "1.9.2+0"
 # ╠═bdac1638-e128-4e7c-8bba-b5c79fb9d37e
 # ╠═a4517045-0e4c-4cc2-b2fa-d66353328fb9
 # ╠═15023b66-63cc-4271-9b12-3bba9a41d6bb
-# ╠═524d27d7-089f-4d78-8020-29f7458445b5
+# ╟─524d27d7-089f-4d78-8020-29f7458445b5
 # ╟─5e6cd360-218f-4a85-a314-a0af148c8dfa
 # ╠═ee4020b6-6f18-41aa-aa1f-173efc43897e
 # ╠═1a98b55a-1930-4e10-b853-24a2abc96049
