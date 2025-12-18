@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.20.19
+# v0.20.21
 
 #> [frontmatter]
 #> language = "en-US"
@@ -32,24 +32,25 @@ begin
 	using Graphs
     using Interpolations: linear_interpolation
     using LaTeXStrings
-    using LinearAlgebra
 	using MetaGraphsNext
-	using OhMyThreads: tmapreduce, tmap, tforeach, treduce
+	using OhMyThreads: tmapreduce, tmap, tmap!, tforeach, treduce
     using Plots
     using PlutoUI
-    using Printf
     using StaticArrays
     using Unitful
 end
+
+# ╔═╡ 777acab3-402a-406b-afae-fd56c76ad42d
+using Interpolations: scale, BSpline, Linear, interpolate, Interpolations
+
+# ╔═╡ 5c397d27-d66b-49c4-9761-3b9a6f1a5f3d
+using Printf, LinearAlgebra, Statistics
 
 # ╔═╡ 34a158e2-8e73-11f0-0005-254000c6e719
 begin
 	using Euler2D
 	using ShockwaveProperties, PlanePolygons, SimpleIntegration
 end
-
-# ╔═╡ 777acab3-402a-406b-afae-fd56c76ad42d
-using Interpolations: scale, BSpline, Linear, interpolate, Interpolations
 
 # ╔═╡ 95dd1578-6475-4fe7-858d-846630ac0b54
 PlutoUI.TableOfContents(aside=false)
@@ -66,16 +67,16 @@ Can be downloaded from CLAIX, if you want to play with it yourself.
 """
 
 # ╔═╡ 246be280-b813-4e17-b33e-c13327882c3e
-const JOB_ID = 60691549
+const JOB_ID = 61836329
 
 # ╔═╡ e7966276-b939-4cd6-9734-00927fd90109
 const NUM_AVAILABLE_SIMULATIONS = length(readdir("../data/$JOB_ID/"))
 
 # ╔═╡ be74336d-cc1a-4070-8ed6-fd59eb3e5307
-MACH_NUMBER_PARAMS = [4.0, 4.05, 4.1, 4.15, 4.20]
+MACH_NUMBER_PARAMS = [4.0, 4.025, 4.05, 4.075, 4.1, 4.125, 4.15, 4.175, 4.20]
 
 # ╔═╡ 97be4f80-dae7-49cd-988a-ce796c1b1922
-GRID_SIZES = [240, 360, 480, 720, 960]
+GRID_SIZES = [480, 720, 960]
 
 # ╔═╡ 37fc1de9-dc4c-43fa-aca6-78da6967f120
 grid_study_parameters = tuple.(MACH_NUMBER_PARAMS, GRID_SIZES');
@@ -85,8 +86,14 @@ const GAS = DRY_AIR;
 
 # ╔═╡ c929d5e1-afe3-4b39-b158-7ac40fbe8081
 trimmed_simulations = [
-	load_cell_sim("../data/$JOB_ID/$i/bow_shock_t20.celltape"; show_info=false) for i=1:NUM_AVAILABLE_SIMULATIONS
+	load_cell_sim("../data/$JOB_ID/$i/bow_shock_t30.celltape"; show_info=false) for i=1:length(grid_study_parameters)
 ];
+
+# ╔═╡ 49943587-b1d0-4f27-b793-b9adbe7b6d0d
+begin
+	s = Base.summarysize(trimmed_simulations)
+	Text("Simulations occupy $(Base.format_bytes(s)).")
+end
 
 # ╔═╡ b75621a7-a0b5-47b9-a5c6-e6812d1da381
 NONDIMENSIONALIZATION_SCALES = map(grid_study_parameters) do (p, _)
@@ -128,10 +135,10 @@ shock_interpolations = map(trimmed_simulations) do sim
 end
 
 # ╔═╡ 01c1a99c-0129-44ee-b3aa-345651121d2f
-N_COARSE = [8, 16, 32, 48, 64];
+N_COARSE = [16, 32, 64, 128];
 
 # ╔═╡ c3ad6fac-5218-4739-adf6-ca296973de9a
-COARSE_WIDTH = [0.075, 0.1125, 0.15];
+COARSE_WIDTH = [0.075, 0.1125];
 
 # ╔═╡ 692e0de2-595a-48cc-9c57-6556a386f27b
 begin
@@ -297,6 +304,16 @@ We can notice the following:
 # ╔═╡ 92e5667a-a1f4-4abd-9b0d-46b2f3c2528e
 @bind dM_pressure_shift_test Slider(0.0:0.001:0.5; show_value=true, default=0.1)
 
+# ╔═╡ a9fd5e40-a63c-485b-8ef0-3f58807cd12c
+md"""
+The previous two charts indicate that there might be an issue with the accumulated tangents... but we'll try to compute GTVs anyway.
+"""
+
+# ╔═╡ 32451b58-34b6-4c5f-b103-02c351c06428
+md"""
+### Computing the GTV over the whole domain
+"""
+
 # ╔═╡ 05a5e23f-b529-4934-9f3e-ce076720eb9e
 md"""
 The following chart shows the relative ``L_1`` error between the pressure field at ``M=4.2`` and the estimated pressure field after a perturbation of size ``\Delta M`` **with** the shock shift calculation. That is to say, the plotted quantity in orange is
@@ -321,6 +338,54 @@ We can see that the relative ``L_1`` error with the shock shift does not signifi
 
 # ╔═╡ 0c627cf5-d8f8-424c-80fe-fde0f78e8101
 @bind PFIELD_SHOCK_DCOARSE_IDX Slider(1:length(COARSE_WIDTH); show_value=true, default=2)
+
+# ╔═╡ 5e4616e7-4205-4fcf-975b-403fc0e79ce1
+md"""
+### Limiting the Domain
+"""
+
+# ╔═╡ d9616622-b7be-43ce-90d7-03a371916939
+md"""
+### Possible Corrections & Improvements
+"""
+
+# ╔═╡ b2ed7dbf-20f0-4481-9891-3c07fee68002
+function opnorm_tangent(sim::CellBasedEulerSim{T, C}, n) where {T, C<:Euler2D.TangentQuadCell}
+	opnorm_field = tmap(sim.cell_ids) do id
+		id == 0 && return missing
+		_, cells = nth_step(sim, n)
+		return opnorm(cells[id].u̇)#*Euler2D.cell_volume(cells[id])
+	end
+	return opnorm_field
+end
+
+# ╔═╡ f0afa4d1-3e61-41a5-ae46-1807401cafe5
+sim_tangent_opnorms = tmap(trimmed_simulations) do sim
+	filter(!ismissing, opnorm_tangent(sim, n_tsteps(sim))) |> sort!
+end;
+
+# ╔═╡ 329e1ea5-d324-4dec-8edf-688f663fffa4
+let
+	data = mapreduce(hcat, sim_tangent_opnorms) do arr
+		vcat(quantile(arr, (0.1, 0.25, 0.5, 0.75, 0.9); sorted=true)...)
+	end
+	p = scatter([0.1, 0.25, 0.5, 0.75, 0.9], data; label=false, marker=:x, ms=4, title="Quantiles of Spectral Norm of the Tangent")
+	p
+end
+
+# ╔═╡ 01d426b7-dfa6-4601-9ca5-9e75c3ab0e04
+md"""
+Notice that the grouping of data points is tighter at ``p=0.1`` and ``p=0.9``, suggesting that the extreme values of each simulation are close together. This might indicate that the cells where the tangent explodes are caused by the numerics of the problem and can be corrected for.
+"""
+
+# ╔═╡ f819160f-ad69-4254-969d-260826bc6d54
+
+
+# ╔═╡ b125e208-50b0-4d17-a171-7d75e84da892
+@bind nhist Slider(axes(sim_tangent_opnorms, 1))
+
+# ╔═╡ 712b010d-0b4e-48a7-a432-9da7a303973e
+histogram(@view sim_tangent_opnorms[nhist][1:end]; normalize=true)
 
 # ╔═╡ 9c01b891-1267-4afb-9074-231ef35b6ce6
 md"""
@@ -422,6 +487,32 @@ let A=PFIELDNOSHOCK_GRIDSIZE_IDX; B=PFIELDNOSHOCK_NCOARSE_IDX; C=PFIELDNOSHOCK_D
 	p
 end
 
+# ╔═╡ 1560d878-705d-4806-a974-9234df4a451f
+let A=PFIELDNOSHOCK_GRIDSIZE_IDX; B=PFIELDNOSHOCK_NCOARSE_IDX; C=PFIELDNOSHOCK_DCOARSE_IDX;
+	compare = @view infos_study[begin:end-1, A,B,C]
+	actual = infos_study[end, A, B, C]
+	actual_dual = coarse_duals_study[end, A, B, C]
+	εs = mapreduce(hcat, compare) do c
+		SVector(0., actual.M_inf-c.M_inf, 0.)
+	end
+	dx, dy = step.(cell_centers(trimmed_simulations[actual.job_idx]))
+	pfield_variation_errors = map(compare, eachcol(εs)) do c, ε
+		P = pressure_fields_study[c.job_idx]
+		ΔP = Δ_pressure_fields_study[c.job_idx]
+		P_actual = pressure_fields_study[actual.job_idx]
+		err_est = map(P_actual, P, ΔP) do P_a, P_k, ΔP_k
+			return (P_a - (P_k + ΔP_k' * ε))
+		end
+		return norm_L1(@view(err_est[81:160, 101:200]), dx, dy)/norm_L1(@view(P_actual[81:160, 101:200]), dx, dy)
+	end
+	volume_ratio = cell_volume(actual_dual[5][2])/(dy*dx)
+	volume_ratio_str = @sprintf "%.2f" volume_ratio
+	dx_str = @sprintf "%1.1e " dx
+	p = plot(εs[2, :], pfield_variation_errors; xflip=true, yscale=:identity, xticks=εs[2,:], label=L"L_1"*" error in pressure field", xlabel=L"\Delta M", ylabel="Error", title="(same as previous, smaller view window)", marker=:o, legend=:topright,dpi=600,size=(800,800))
+	plot!(p, εs[2, :], 0.25*εs[2, :], label=L"\mathcal{O}(\Delta M)")
+	p
+end
+
 # ╔═╡ f52ef52e-b783-4dce-b17d-19bc7e2e237d
 function plot_coarse_dual(infos, sim, shock, dual)
 	shock_x = [shock(s)[1] for s=0.0:0.01:1.0]
@@ -431,19 +522,23 @@ function plot_coarse_dual(infos, sim, shock, dual)
 		shock_x,
 		shock_y;
 		xlims = (first(bx), last(bx)),
-		ylims = (first(by), last(by)),
+		ylims = (first(by), 1.5),
 		label = "Extracted shock front",
-		title = "Shock @ "*L"M=%$(infos.M_inf), N_x=%$(infos.Nx), N_{c}=%$(infos.n_coarse), \Delta x_{c}=%$(infos.coarse_width)",
+		title = "Shock @ "*L"M=%$(infos.M_inf), N_x=%$(infos.Nx), N_{Q}=%$(infos.n_coarse), \Delta x_{Q}=%$(infos.coarse_width)",
 		lw=4,
 		aspect_ratio=:equal,
-		size=(600,800),
-		dpi=600
+		size=(600,600),
+		dpi=600,
+		labelfontsize=12,
+		xlabel=L"x",
+		ylabel=L"y",
+		tickfontsize=12
 	)
 	for id ∈ labels(dual)
 		id == 0 && continue
 		_, ccell = dual[id]
 		pts = reduce(hcat, cell_boundary_polygon(ccell) |> edge_starts)
-		scatter!(p, pts[1, :], pts[2,:], label=false, color=:green, marker=:x)
+		scatter!(p, pts[1, :], pts[2,:], label=false, color=:green, marker=:x, ms=2)
 		plot!(p, @view(pts[1,:]), @view(pts[2,:]); lw=0.5, fill=true, fillalpha=0.5, fillstyle=:/, label=false, color=:green, seriestype=:shape)
 	end
 	return p
@@ -481,9 +576,10 @@ let N = N_info_1
 	id = infos_study[N].job_idx
 	p = plot_coarse_dual(infos_study[N], trimmed_simulations[id], shock_interpolations[id], coarse_duals_study[N])
 	s_disp = displaced_shock(shock_interpolations[id], ξ_study[N], SVector(0., 0.1, 0.))
-	px = [s_disp(s)[1] for s ∈ 0.0:0.01:1.0]
-	py = [s_disp(s)[2] for s ∈ 0.0:0.01:1.0]
-	plot!(p, px, py; label="Shock + Perturbation; "*L"\Delta M =0.1", lw=2)
+	px = [s_disp(s)[1] for s ∈ 0.0:0.02:1.0]
+	py = [s_disp(s)[2] for s ∈ 0.0:0.02:1.0]
+	plot!(p, px, py; label="Shock + Perturbation; "*L"\Delta M =0.1", lw=4, ls=:dot)
+	savefig(p, "../gfx/local_pseudo_$N.pdf")
 	p
 end
 
@@ -514,8 +610,9 @@ let A=STUDY1_NGRID_IDX; B=STUDY1_NCOARSE_IDX; C=STUDY1_DCOARSE_IDX
 	volume_ratio = cell_volume(actual_dual[5][2])/(dy*dx)
 	volume_ratio_str = @sprintf "%.2f" volume_ratio
 	dx_str = @sprintf "%1.1e " dx
-	p = plot(εs[2, :], shock_displacement_errors; xflip=true, yscale=:identity, xticks=εs[2,:], label=L"L_1"*" error in shock displacement.", xlabel=L"\Delta M", ylabel="Error", title=L"\Delta x_{sim}="*(dx_str)*L", N_{c}=%$(n240[1].n_coarse), \Delta x_{c}=%$(n240[1].coarse_width), \frac{V_{coarse}}{V_{sim}}\approx"*volume_ratio_str, marker=:o, legend=:topright,dpi=600,size=(800,800))
-	plot!(p, εs[2, :], 0.05*εs[2, :], label=L"\mathcal{O}(\Delta M)")
+	p = plot(εs[2, :], shock_displacement_errors; xflip=true, yscale=:identity, xticks=εs[2,:], label=L"L_1"*" error in shock displacement", xlabel=L"\Delta M", ylabel="Rel. Error", title=L"N_{x, sim}=%$(trimmed_simulations[actual.job_idx].ncells[1]), N_{Q}=%$(n240[1].n_coarse), \Delta x_{Q}=%$(n240[1].coarse_width), \frac{V_{Q}}{V_{sim}}\approx"*volume_ratio_str, marker=:o, legend=:topright,dpi=600,size=(800,800), legendfontsize=14, ms=6, lw=4, labelfontsize=14)
+	plot!(p, εs[2, :], 0.05*εs[2, :], label=L"\mathcal{O}(\Delta M)", ls=:dash, lw=2)
+	savefig(p, "../gfx/shock_displacement_l1_norm_$(A)_$(B)_$C.pdf")
 	p
 end
 
@@ -594,7 +691,7 @@ function evaluate_bressan_interpolation(fib::FieldInterpolationBressan{T, DV, RE
 		local n = -1*right_normal(ℓ)
 		local ℓ2 = Line(pt, n)
 		local jump_pt = line_intersect(ℓ, ℓ2)
-		local dn = 4*step(first(fib.cell_centers))
+		local dn = 2*step(first(fib.cell_centers))
 		fL, fR = sample_jump(fib.field, PointSampleJumpStrategy(n, dn), jump_pt)
 		local Δ::T = fR - fL
 		return fib.field(pt...) + fib.dfield(pt...) - Δ
@@ -602,21 +699,23 @@ function evaluate_bressan_interpolation(fib::FieldInterpolationBressan{T, DV, RE
 	return fib.field(pt...) + fib.dfield(pt...)
 end
 
-# ╔═╡ d1e81d1c-e62f-4035-8450-838ab4776c07
-function find_jump_at(sim, tstep, pt, n, t, dn, dt)
-	p1 = pt - 0.5 * dt * t
-	p4 = pt + 0.5 * dt * t
-	p2 = p1 + dn * n
-	p3 = p4 + dn * n
-	p5 = p1 - dn * n
-	p6 = p4 - dn * n
-
-	polyL = SClosedPolygon(p1, p2, p3, p4)
-	polyR = SClosedPolygon(p5, p1, p4, p6)
-	(uL, u̇L) = Euler2D.total_mass_contained_by(polyL, sim, tstep)
-	(uR, u̇R) = Euler2D.total_mass_contained_by(polyR, sim, tstep)
-
-	return (uL / poly_area(polyL), uR / poly_area(uR))
+# ╔═╡ 954ac0df-db36-459b-87fd-083cc59ad8ee
+let N = 208; dM = dM_pressure_shift_test;
+	s = (0.0:0.01:1.0)[begin:end-1]
+	n1 = infos_study[N].job_idx
+	sim = trimmed_simulations[n1]
+	field = pressure_field(sim, 1, GAS)
+	interp_field = interpolate_field_with_bcs(field, cell_centers(sim), BOUNDARY_CONDITIONS)
+	shock = shock_interpolations[n1]
+	ys = reinterpret(reshape, Float64, shock.(s))[2, :]
+	jumps_point_sample = map(s) do s_k
+		x = shock(s_k)
+		n = -SMatrix{2,2}(0., -1., 1., 0.) * Interpolations.gradient(shock, s_k)[1]
+		dn = 2*step(cell_centers(sim, 1))
+		fL, fR = sample_jump(interp_field, PointSampleJumpStrategy(n ,dn), x)
+		return abs(fR-fL)
+	end
+	plot(ys, jumps_point_sample; label=L"\Delta(s(y))"*"(single point sample)", xlabel=L"y", ylabel=s"\Delta P", title="Pressure Field Jump")
 end
 
 # ╔═╡ 839d2c4a-16ef-468f-ab0f-3da36f803df0
@@ -709,7 +808,7 @@ function make_bressan_interpolation(f,
 end
 
 # ╔═╡ f4f9ce73-a5e7-469c-9c1c-a0173ab05d92
-let N = 276; dM=dM_pressure_shift_test
+let N = 208; dM=dM_pressure_shift_test
 	n1 = infos_study[N].job_idx
 	bi = make_bressan_interpolation(
 	u->dimensionless_pressure(u, GAS), trimmed_simulations[n1], 1, 
@@ -720,7 +819,8 @@ let N = 276; dM=dM_pressure_shift_test
 	data = tmap(pts) do pt
 		evaluate_bressan_interpolation(bi, pt)
 	end
-	heatmap(data', aspect_ratio=:equal, xlims=(1, length(x)), ylims=(1, length(y)), dpi=600, size=(600,800))#, clims=(0., maximum(data)))
+	heatmap(data', aspect_ratio=:equal, xlims=(1, length(x)), ylims=(1, length(y)), dpi=600, size=(600,800), clims=(0., maximum(data)))
+	#heatmap(data', aspect_ratio=:equal, xlims=(151, 250), ylims=(1, 100), dpi=600, size=(600,800))#, clims=(0., maximum(data)))
 end
 
 # ╔═╡ 0e0a75b3-5ecb-4d28-bea8-780f8ad9fcef
@@ -759,10 +859,10 @@ let A=PFIELD_SHOCK_GRIDSIZE_IDX; B=PFIELD_SHOCK_NCOARSE_IDX; C=PFIELD_SHOCK_DCOA
 	volume_ratio = cell_volume(actual_dual[5][2])/(dy*dx)
 	volume_ratio_str = @sprintf "%.2f" volume_ratio
 	dx_str = @sprintf "%1.1e " dx
-	p = plot(εs[2, :], pfield_variation_errors; xflip=true, yscale=:identity, xticks=εs[2,:], label=L"L_1"*" error in pressure field (no shock shift)", xlabel=L"\Delta M", ylabel="Error", title=L"\Delta x_{sim}="*(dx_str)*L", N_{c}=%$(compare[1].n_coarse), \Delta x_{c}=%$(compare[1].coarse_width), \frac{V_{coarse}}{V_{sim}}\approx"*volume_ratio_str, marker=:o, legend=:topright,dpi=600,size=(800,800))
+	p = plot(εs[2, :], pfield_variation_errors; xflip=true, yscale=:log10, xscale=:log10, xticks=εs[2,:], label=L"L_1"*" error in pressure field (no shock shift)", xlabel=L"\Delta M", ylabel="Error", title=L"\Delta x_{sim}="*(dx_str)*L", N_{c}=%$(compare[1].n_coarse), \Delta x_{c}=%$(compare[1].coarse_width), \frac{V_{coarse}}{V_{sim}}\approx"*volume_ratio_str, marker=:o, legend=:topright,dpi=600,size=(800,800))
 	plot!(p, εs[2, :], pfield_bressan_errors; label=L"L_1"*" error in pressure field (with shock shift)", marker=:star, ms=6)
 	plot!(p, εs[2, :], 0.25*εs[2, :], label=L"\mathcal{O}(\Delta M)")
-	plot!(p, εs[2, :], εs[2, :].^2, label=L"\mathcal{O}(\Delta M^2)")
+	plot!(p, εs[2, :], 1.25*εs[2, :].^2, label=L"\mathcal{O}(\Delta M^2)")
 	p
 end
 
@@ -770,7 +870,115 @@ end
 function redo_interpolation_in_y(Γ, s)
 	T = eltype(Γ(first(s)))
 	data = reinterpret(reshape, T, Γ.(s))
-	return scale(interpolate(data[1, :], BSpline(Linear())), data[2, :])
+	return interpolate((data[2, :],), data[1, :], Interpolations.Gridded(Linear()))
+end
+
+# ╔═╡ 88ce2098-e014-4cdd-a19f-651fe4938986
+function blob_integrate_2d(f, g, h, s, Nt)
+	return tmapreduce(+, s[begin:end-1], s[begin+1:end]) do s1, s2
+		tL_1 = g(s1)
+		tR_1 = g(s2)
+		dtL = (h(s1) - g(s1)) / (Nt-1)
+		dtR = (h(s2) - g(s2)) / (Nt-1)
+		return mapreduce(+, (1:Nt)[begin:end-1], (1:Nt)[begin+1:end]) do i, j 
+			poly = SClosedPolygon(
+				tL_1+(i-1)*dtL, 
+				tL_1+(j-1)*dtL, 
+				tR_1+(j-1)*dtR, 
+				tR_1+(i-1)*dtR
+			)
+			dA = poly_area(poly)
+			return sum(pt->f(pt...), edge_starts(poly)) * dA / 4
+		end
+	end
+end
+
+# ╔═╡ 014a819a-f3b5-467d-a45e-329ec5b7e224
+function integrate_near_curve(f, g, s, Δ, Nt)
+	
+	g1(s) = g(s) + Δ
+	g2(s) = g(s) - Δ
+	return blob_integrate_2d(f, g1, g2, s, Nt)
+end
+
+# ╔═╡ 7d6257ef-43bd-4e7e-98aa-b2368ef7cb4a
+function integrate_near_shock(f, Γ, y, Δ)
+	Γ_via_y = redo_interpolation_in_y(Γ, 0.0:0.01:1.0)
+	g2(y) = Γ_via_y(y) + Δ
+	g1(y) = Γ_via_y(y) - Δ
+	dy = step(y)
+	Nx = ceil(Int, 2*Δ / dy)
+	return integrate(y) do y1
+		x = range(g1(y1), g2(y1); length=Nx)
+		integrate(Base.Fix2(f, y1), x; threaded=false)
+	end
+end
+
+# ╔═╡ 6c94b835-824e-44e9-b245-2ea549524667
+let A=PFIELD_SHOCK_GRIDSIZE_IDX; B=PFIELD_SHOCK_NCOARSE_IDX; C=PFIELD_SHOCK_DCOARSE_IDX;
+	compare = @view infos_study[begin:end-1, A, B, C]
+	compare_ξs = @view ξ_study[begin:end-1, A, B, C]
+	actual = infos_study[end, A, B, C]
+	actual_dual = coarse_duals_study[end, A, B, C]
+	εs = mapreduce(hcat, compare) do c
+		SVector(0., actual.M_inf-c.M_inf, 0.)
+	end
+	P_actual = interpolate_field_with_bcs(
+		pressure_fields_study[actual.job_idx],
+		cell_centers(trimmed_simulations[actual.job_idx]),
+		BOUNDARY_CONDITIONS
+	)
+	dx, dy = cell_centers(trimmed_simulations[actual.job_idx])
+	norm_P_actual = integrate_near_shock((x,y)->P_actual(x,y), shock_interpolations[actual.job_idx], 0.0:0.01:1.5, 0.625)
+	pfield_variation_errors = map(compare, eachcol(εs)) do c, ε
+		sim = trimmed_simulations[c.job_idx]
+		shock = shock_interpolations[c.job_idx]
+		
+		P = interpolate_field_with_bcs(
+			pressure_fields_study[c.job_idx],
+			cell_centers(sim),
+			BOUNDARY_CONDITIONS
+		)
+			
+		ΔP = interpolate_field_with_bcs(
+			Δ_pressure_fields_study[c.job_idx],
+			cell_centers(sim),
+			BOUNDARY_CONDITIONS
+		)
+		
+		local s = 0.0:0.01:1.0
+		norm_err_est = integrate_near_shock(shock, 0.0:0.01:1.5, 0.0625) do x, y
+			P_a = P_actual(x, y)
+			P_est = P(x,y) + ΔP(x,y)' * ε
+			return abs(P_a - P_est)
+		end
+		return norm_err_est / norm_P_actual
+	end
+
+	pfield_bressan_errors = map(compare, compare_ξs, eachcol(εs)) do c, ξ, ε
+		local n = c.job_idx
+		sim = trimmed_simulations[n]
+		shock = shock_interpolations[n]
+		bi = make_bressan_interpolation(
+			Base.Fix2(dimensionless_pressure, GAS), sim, 
+			1, shock_interpolations[n], ξ, Vector(ε)
+		)
+		norm_err = integrate_near_shock(shock, 0.0:0.01:1.5, 0.0625) do x, y
+			P_a = P_actual(x, y)
+			P_est = evaluate_bressan_interpolation(bi, SVector(x, y))
+			return abs(P_a - P_est)
+		end
+		return norm_err / norm_P_actual
+	end
+	
+	volume_ratio = cell_volume(actual_dual[5][2])/(step(dy)*step(dx))
+	volume_ratio_str = @sprintf "%.2f" volume_ratio
+	dx_str = @sprintf "%1.1e " step(dx)
+	p = plot(εs[2, :], pfield_variation_errors; xflip=true, yscale=:log10, xscale=:log10, xticks=εs[2,:], label=L"L_1"*" error in pressure field (no shock shift)", xlabel=L"\Delta M", ylabel="Error", marker=:o, legend=:topright,dpi=600,size=(800,800))
+	plot!(p, εs[2, :], pfield_bressan_errors; label=L"L_1"*" error in pressure field (with shock shift)", marker=:star, ms=6)
+	#plot!(p, εs[2, :], 0.1*εs[2, :], label=L"\mathcal{O}(\Delta M)")
+	#plot!(p, εs[2, :], εs[2, :].^2, label=L"\mathcal{O}(\Delta M^2)")
+	p
 end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
@@ -793,6 +1001,7 @@ Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 ShockwaveProperties = "77d2bf28-a3e9-4b9c-9fcf-b85f74cc8a50"
 SimpleIntegration = "f1de6737-2331-4f40-83c2-33cf2af9fc78"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [compat]
@@ -818,9 +1027,9 @@ Unitful = "~1.25.0"
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.11.7"
+julia_version = "1.12.2"
 manifest_format = "2.0"
-project_hash = "8d7a8665ac524a5aed3aa33e16dc3c88aa040ea2"
+project_hash = "0309ec43693e76b90d3ea12391968cbc35284853"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "27cecae79e5cc9935255f90c53bb831cc3c870d7"
@@ -1105,7 +1314,7 @@ weakdeps = ["Dates", "LinearAlgebra"]
 [[deps.CompilerSupportLibraries_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "e66e0078-7015-5450-92f7-15fbd957f2ae"
-version = "1.1.1+0"
+version = "1.3.0+1"
 
 [[deps.CompositionsBase]]
 git-tree-sha1 = "802bb88cd69dfd1509f6670416bd4434015693ad"
@@ -1256,7 +1465,7 @@ version = "0.9.5"
 [[deps.Downloads]]
 deps = ["ArgTools", "FileWatching", "LibCURL", "NetworkOptions"]
 uuid = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
-version = "1.6.0"
+version = "1.7.0"
 
 [[deps.EnumX]]
 git-tree-sha1 = "bddad79635af6aec424f53ed8aad5d7555dc6f00"
@@ -1601,6 +1810,11 @@ git-tree-sha1 = "4255f0032eafd6451d707a51d5f0248b8a165e4d"
 uuid = "aacddb02-875f-59d6-b918-886e6ef4fbf8"
 version = "3.1.3+0"
 
+[[deps.JuliaSyntaxHighlighting]]
+deps = ["StyledStrings"]
+uuid = "ac6e5ff7-fb65-4e79-a425-ec3bc9c03011"
+version = "1.12.0"
+
 [[deps.LAME_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
 git-tree-sha1 = "059aabebaa7c82ccb853dd4a0ee9d17796f7e1bc"
@@ -1660,24 +1874,24 @@ uuid = "b27032c2-a3e7-50c8-80cd-2d36dbcbfd21"
 version = "0.6.4"
 
 [[deps.LibCURL_jll]]
-deps = ["Artifacts", "LibSSH2_jll", "Libdl", "MbedTLS_jll", "Zlib_jll", "nghttp2_jll"]
+deps = ["Artifacts", "LibSSH2_jll", "Libdl", "OpenSSL_jll", "Zlib_jll", "nghttp2_jll"]
 uuid = "deac9b47-8bc7-5906-a0fe-35ac56dc84c0"
-version = "8.6.0+0"
+version = "8.15.0+0"
 
 [[deps.LibGit2]]
-deps = ["Base64", "LibGit2_jll", "NetworkOptions", "Printf", "SHA"]
+deps = ["LibGit2_jll", "NetworkOptions", "Printf", "SHA"]
 uuid = "76f85450-5226-5b5a-8eaa-529ad045b433"
 version = "1.11.0"
 
 [[deps.LibGit2_jll]]
-deps = ["Artifacts", "LibSSH2_jll", "Libdl", "MbedTLS_jll"]
+deps = ["Artifacts", "LibSSH2_jll", "Libdl", "OpenSSL_jll"]
 uuid = "e37daf67-58a4-590a-8e99-b0245dd2ffc5"
-version = "1.7.2+0"
+version = "1.9.0+0"
 
 [[deps.LibSSH2_jll]]
-deps = ["Artifacts", "Libdl", "MbedTLS_jll"]
+deps = ["Artifacts", "Libdl", "OpenSSL_jll"]
 uuid = "29816b5a-b9ab-546f-933c-edad1886dfa8"
-version = "1.11.0+1"
+version = "1.11.3+1"
 
 [[deps.Libdl]]
 uuid = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
@@ -1734,7 +1948,7 @@ version = "0.1.4"
 [[deps.LinearAlgebra]]
 deps = ["Libdl", "OpenBLAS_jll", "libblastrampoline_jll"]
 uuid = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-version = "1.11.0"
+version = "1.12.0"
 
 [[deps.LogExpFunctions]]
 deps = ["DocStringExtensions", "IrrationalConstants", "LinearAlgebra"]
@@ -1789,7 +2003,7 @@ uuid = "d125e4d3-2237-4719-b19c-fa641b8a4667"
 version = "0.1.8"
 
 [[deps.Markdown]]
-deps = ["Base64"]
+deps = ["Base64", "JuliaSyntaxHighlighting", "StyledStrings"]
 uuid = "d6f4376e-aef5-505a-96c1-9c027394607a"
 version = "1.11.0"
 
@@ -1810,7 +2024,8 @@ uuid = "739be429-bea8-5141-9913-cc70e7f3736d"
 version = "1.1.9"
 
 [[deps.MbedTLS_jll]]
-deps = ["Artifacts", "Libdl"]
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "926c6af3a037c68d02596a44c22ec3595f5f760b"
 uuid = "c8ffd9c3-330d-5841-b78e-0817d7145fa1"
 version = "2.28.6+0"
 
@@ -1843,7 +2058,7 @@ version = "0.3.7"
 
 [[deps.MozillaCACerts_jll]]
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
-version = "2023.12.12"
+version = "2025.5.20"
 
 [[deps.NaNMath]]
 deps = ["OpenLibm_jll"]
@@ -1853,7 +2068,7 @@ version = "1.1.3"
 
 [[deps.NetworkOptions]]
 uuid = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
-version = "1.2.0"
+version = "1.3.0"
 
 [[deps.NonlinearSolveBase]]
 deps = ["ADTypes", "Adapt", "ArrayInterface", "CommonSolve", "Compat", "ConcreteStructs", "DifferentiationInterface", "EnzymeCore", "FastClosures", "LinearAlgebra", "Markdown", "MaybeInplace", "Preferences", "Printf", "RecursiveArrayTools", "SciMLBase", "SciMLJacobianOperators", "SciMLOperators", "SciMLStructures", "Setfield", "StaticArraysCore", "SymbolicIndexingInterface", "TimerOutputs"]
@@ -1915,12 +2130,12 @@ weakdeps = ["Markdown"]
 [[deps.OpenBLAS_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
 uuid = "4536629a-c528-5b80-bd46-f80d51c5b363"
-version = "0.3.27+1"
+version = "0.3.29+0"
 
 [[deps.OpenLibm_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "05823500-19ac-5b8b-9628-191a04bc5112"
-version = "0.8.5+0"
+version = "0.8.7+0"
 
 [[deps.OpenSSL]]
 deps = ["BitFlags", "Dates", "MozillaCACerts_jll", "OpenSSL_jll", "Sockets"]
@@ -1929,8 +2144,7 @@ uuid = "4d8831e6-92b7-49fb-bdf8-b643e874388c"
 version = "1.5.0"
 
 [[deps.OpenSSL_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "f19301ae653233bc88b1810ae908194f07f8db9d"
+deps = ["Artifacts", "Libdl"]
 uuid = "458c3c95-2e84-50aa-8efc-19380b2a3a95"
 version = "3.5.4+0"
 
@@ -1954,7 +2168,7 @@ version = "1.8.1"
 [[deps.PCRE2_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "efcefdf7-47ab-520b-bdef-62a2eaa19f15"
-version = "10.42.0+1"
+version = "10.44.0+1"
 
 [[deps.Pango_jll]]
 deps = ["Artifacts", "Cairo_jll", "Fontconfig_jll", "FreeType2_jll", "FriBidi_jll", "Glib_jll", "HarfBuzz_jll", "JLLWrappers", "Libdl"]
@@ -1977,7 +2191,7 @@ version = "0.44.2+0"
 [[deps.Pkg]]
 deps = ["Artifacts", "Dates", "Downloads", "FileWatching", "LibGit2", "Libdl", "Logging", "Markdown", "Printf", "Random", "SHA", "TOML", "Tar", "UUIDs", "p7zip_jll"]
 uuid = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
-version = "1.11.0"
+version = "1.12.0"
 weakdeps = ["REPL"]
 
     [deps.Pkg.extensions]
@@ -2102,7 +2316,7 @@ uuid = "e99dba38-086e-5de3-a5b1-6e4c66e897c3"
 version = "6.8.2+1"
 
 [[deps.REPL]]
-deps = ["InteractiveUtils", "Markdown", "Sockets", "StyledStrings", "Unicode"]
+deps = ["InteractiveUtils", "JuliaSyntaxHighlighting", "Markdown", "Sockets", "StyledStrings", "Unicode"]
 uuid = "3fa0cd96-eef1-5676-8a61-b3b8758bbffb"
 version = "1.11.0"
 
@@ -2359,7 +2573,7 @@ version = "1.2.2"
 [[deps.SparseArrays]]
 deps = ["Libdl", "LinearAlgebra", "Random", "Serialization", "SuiteSparse_jll"]
 uuid = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
-version = "1.11.0"
+version = "1.12.0"
 
 [[deps.SpecialFunctions]]
 deps = ["IrrationalConstants", "LogExpFunctions", "OpenLibm_jll", "OpenSpecFun_jll"]
@@ -2444,7 +2658,7 @@ version = "1.11.0"
 [[deps.SuiteSparse_jll]]
 deps = ["Artifacts", "Libdl", "libblastrampoline_jll"]
 uuid = "bea87d4a-7f5b-5778-9afe-8cc45184846c"
-version = "7.7.0+0"
+version = "7.8.3+2"
 
 [[deps.SymbolicIndexingInterface]]
 deps = ["Accessors", "ArrayInterface", "RuntimeGeneratedFunctions", "StaticArraysCore"]
@@ -2745,7 +2959,7 @@ version = "1.6.0+0"
 [[deps.Zlib_jll]]
 deps = ["Libdl"]
 uuid = "83775a58-1f1d-513f-b197-d71354ab007a"
-version = "1.2.13+1"
+version = "1.3.1+2"
 
 [[deps.Zstd_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -2780,7 +2994,7 @@ version = "0.17.4+0"
 [[deps.libblastrampoline_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "8e850b90-86db-534c-a0d3-1478176c7d93"
-version = "5.11.0+0"
+version = "5.15.0+0"
 
 [[deps.libdecor_jll]]
 deps = ["Artifacts", "Dbus_jll", "JLLWrappers", "Libdl", "Libglvnd_jll", "Pango_jll", "Wayland_jll", "xkbcommon_jll"]
@@ -2827,12 +3041,12 @@ version = "1.1.7+0"
 [[deps.nghttp2_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "8e850ede-7688-5339-a07c-302acd2aaf8d"
-version = "1.59.0+0"
+version = "1.64.0+1"
 
 [[deps.p7zip_jll]]
-deps = ["Artifacts", "Libdl"]
+deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
 uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
-version = "17.4.0+2"
+version = "17.7.0+0"
 
 [[deps.x264_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -2855,17 +3069,19 @@ version = "1.9.2+0"
 
 # ╔═╡ Cell order:
 # ╠═7fde6567-ead7-4074-8d26-20e128ca6c51
-# ╠═34a158e2-8e73-11f0-0005-254000c6e719
 # ╠═777acab3-402a-406b-afae-fd56c76ad42d
+# ╠═5c397d27-d66b-49c4-9761-3b9a6f1a5f3d
+# ╠═34a158e2-8e73-11f0-0005-254000c6e719
 # ╟─95dd1578-6475-4fe7-858d-846630ac0b54
 # ╟─fb198cb0-3311-452a-8281-dbd22ac84698
-# ╟─246be280-b813-4e17-b33e-c13327882c3e
+# ╠═246be280-b813-4e17-b33e-c13327882c3e
 # ╟─e7966276-b939-4cd6-9734-00927fd90109
 # ╠═be74336d-cc1a-4070-8ed6-fd59eb3e5307
 # ╠═97be4f80-dae7-49cd-988a-ce796c1b1922
 # ╠═37fc1de9-dc4c-43fa-aca6-78da6967f120
 # ╠═29094a06-14d1-4f13-8897-1778f433c3e4
 # ╠═c929d5e1-afe3-4b39-b158-7ac40fbe8081
+# ╠═49943587-b1d0-4f27-b793-b9adbe7b6d0d
 # ╟─b75621a7-a0b5-47b9-a5c6-e6812d1da381
 # ╟─630a4f22-feb2-49e9-985d-39113c369c79
 # ╟─e3aad88f-f50c-4019-aeb4-5dc293b14d56
@@ -2880,7 +3096,7 @@ version = "1.9.2+0"
 # ╟─48f20a1e-ed0e-4162-9654-3c95d2f2d54a
 # ╟─1bdab4fe-4221-4424-b6cd-f1252fa01a56
 # ╟─645aa994-b0d6-4730-8ff9-5a4355c8ba70
-# ╟─1d6acc0c-602d-4100-a3db-083fc7bf72fd
+# ╠═1d6acc0c-602d-4100-a3db-083fc7bf72fd
 # ╟─9c367f06-a4cf-4313-af3d-b68ba3045f2c
 # ╟─3c17ff8d-9db8-492e-9444-b52c04ead23e
 # ╟─3498c1df-dca2-4927-9f9d-6ff09213bc95
@@ -2904,33 +3120,49 @@ version = "1.9.2+0"
 # ╠═ee4020b6-6f18-41aa-aa1f-173efc43897e
 # ╠═1a98b55a-1930-4e10-b853-24a2abc96049
 # ╠═b2bdcc84-be3b-420a-8145-3f405cc31090
+# ╠═1560d878-705d-4806-a974-9234df4a451f
 # ╟─3a3e7488-1aa8-4805-a525-45b6e78ba44a
 # ╟─56d34719-ad41-4203-ba59-095a8e7d60ab
 # ╠═9353f6e9-419c-474d-a56b-c7b49484c8d5
 # ╟─0f33a9f7-b748-42fc-9f88-084087ea6e6a
 # ╟─41561229-23c9-4a9e-83f9-8180f4c8da55
-# ╟─f4f9ce73-a5e7-469c-9c1c-a0173ab05d92
+# ╠═f4f9ce73-a5e7-469c-9c1c-a0173ab05d92
 # ╠═92e5667a-a1f4-4abd-9b0d-46b2f3c2528e
+# ╟─954ac0df-db36-459b-87fd-083cc59ad8ee
+# ╟─a9fd5e40-a63c-485b-8ef0-3f58807cd12c
+# ╟─32451b58-34b6-4c5f-b103-02c351c06428
 # ╟─05a5e23f-b529-4934-9f3e-ce076720eb9e
 # ╟─0e0a75b3-5ecb-4d28-bea8-780f8ad9fcef
 # ╠═494b3808-593c-4351-b975-74f9e06a37f1
 # ╠═0fa79d93-0797-4579-9859-c652ba2fcec4
 # ╠═0c627cf5-d8f8-424c-80fe-fde0f78e8101
+# ╟─5e4616e7-4205-4fcf-975b-403fc0e79ce1
+# ╟─6c94b835-824e-44e9-b245-2ea549524667
+# ╟─d9616622-b7be-43ce-90d7-03a371916939
+# ╠═b2ed7dbf-20f0-4481-9891-3c07fee68002
+# ╠═f0afa4d1-3e61-41a5-ae46-1807401cafe5
+# ╠═329e1ea5-d324-4dec-8edf-688f663fffa4
+# ╟─01d426b7-dfa6-4601-9ca5-9e75c3ab0e04
+# ╠═f819160f-ad69-4254-969d-260826bc6d54
+# ╠═712b010d-0b4e-48a7-a432-9da7a303973e
+# ╠═b125e208-50b0-4d17-a171-7d75e84da892
 # ╟─9c01b891-1267-4afb-9074-231ef35b6ce6
-# ╠═88b5a408-1bb0-4470-9a52-d0d39ba85719
-# ╠═0be26b27-55b1-43f4-a006-0efc83e16991
+# ╟─88b5a408-1bb0-4470-9a52-d0d39ba85719
+# ╟─0be26b27-55b1-43f4-a006-0efc83e16991
 # ╠═f52ef52e-b783-4dce-b17d-19bc7e2e237d
-# ╠═1cfa2576-1fc6-4109-adb7-3061162ce53b
-# ╠═852f5de1-7f2f-49f6-95b9-27ecfc498e11
-# ╠═114c77e8-3a21-4dd2-9941-e2252891f6b0
-# ╠═d13db3a9-73d3-4d80-98f5-d823cbddcb4e
-# ╠═c4f55c76-5b50-4912-8526-c38b7ac4dc5b
+# ╟─1cfa2576-1fc6-4109-adb7-3061162ce53b
+# ╟─852f5de1-7f2f-49f6-95b9-27ecfc498e11
+# ╟─114c77e8-3a21-4dd2-9941-e2252891f6b0
+# ╟─d13db3a9-73d3-4d80-98f5-d823cbddcb4e
+# ╟─c4f55c76-5b50-4912-8526-c38b7ac4dc5b
 # ╠═789da7b0-85f3-46d6-afed-fbb3443c0dca
 # ╠═5b6decd8-9fbf-4d09-ad23-4eede25fc9e2
 # ╠═d61ae51d-0a32-45ff-a7fb-267ca4a4d398
-# ╠═d1e81d1c-e62f-4035-8450-838ab4776c07
-# ╠═839d2c4a-16ef-468f-ab0f-3da36f803df0
-# ╠═0b843dec-e5b3-40d2-9359-44b21ba43e58
+# ╟─839d2c4a-16ef-468f-ab0f-3da36f803df0
+# ╟─0b843dec-e5b3-40d2-9359-44b21ba43e58
 # ╠═fee1178a-fa33-48c1-a3ab-e761c1cb5c12
+# ╠═88ce2098-e014-4cdd-a19f-651fe4938986
+# ╠═014a819a-f3b5-467d-a45e-329ec5b7e224
+# ╠═7d6257ef-43bd-4e7e-98aa-b2368ef7cb4a
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
