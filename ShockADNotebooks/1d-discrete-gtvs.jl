@@ -141,6 +141,13 @@ u^{(1)}_\mathrm{gen}(t, x; p, p^{(1)}) = u^{(1)}_\mathrm{broad}(t,x;p)\cdot p^{(
 ```
 """
 
+# ╔═╡ 9b6746ad-fd16-4bd2-a7b3-4f9315b58ef6
+md"""
+### Convergence of the Analytic Generalized Tangent
+
+We will test this in the ``L_1`` norm.
+"""
+
 # ╔═╡ 35159259-8493-4fad-a1fb-25801ef4db13
 md"""
 ## Numerical Solution
@@ -417,6 +424,7 @@ end
 # ╔═╡ 0f7d6377-63bf-411b-9f4b-aaf2059d8840
 function step_shock_location(Ξ, U, xs, Δt)
 	U_shock = piecewise_constant_interp(U, xs)(Ξ)
+	# ∇_u f(u) is done via AD!
 	return Ξ + Δt * df(U_shock)
 end
 
@@ -625,6 +633,21 @@ function u_generalized(t, x, p, pdot=1)
 		res -= X(x, ξ(t, p)+ξdot, ξ(t,p))*Δ
 	end
 	return res
+end
+
+# ╔═╡ c8a4aa19-fa10-48a4-a905-54d0a38e29e5
+function compute_analytic_gtv_l1_error(t, xs, p0, Δp)
+	return norm_L1(xs; threaded=(length(xs) > 2000)) do x
+		u_ex = u(t, x, p0+Δp)
+		u_est = u(t, x, p0) + u_generalized(t, x, p0, Δp)
+		return u_ex - u_est
+	end
+end
+
+# ╔═╡ 943c0281-1179-425b-838c-5decf0e9a7e9
+let t = 1.0, ps=0:0.25:1.5
+	xs = 0.:0.001:4.
+	@benchmark compute_analytic_gtv_l1_error($t, $xs, 1.0, 0.01)
 end
 
 # ╔═╡ 2d535aaf-00e7-4537-9519-04a5c4a65da6
@@ -2306,8 +2329,12 @@ version = "1.13.0+0"
 # ╟─edeca56b-d86d-4506-875f-b42f2159b82a
 # ╟─fb9534f9-ad52-4425-8358-c84f4c5d6d74
 # ╠═0f7ce95b-9d92-4f5a-8811-4bb80787d030
+# ╠═eea8b0e4-bb9d-43ff-bd0b-1a7f8e1462f9
 # ╟─e93d9cef-dec3-41f0-bc6c-8cd755c495fb
 # ╟─c1e4d0d0-111a-47a9-87db-9a5cf0f72af5
+# ╠═9b6746ad-fd16-4bd2-a7b3-4f9315b58ef6
+# ╠═c8a4aa19-fa10-48a4-a905-54d0a38e29e5
+# ╠═943c0281-1179-425b-838c-5decf0e9a7e9
 # ╟─35159259-8493-4fad-a1fb-25801ef4db13
 # ╠═72c50045-869b-45f2-97bd-aac2f817f4ba
 # ╟─ba60ee99-2896-451b-a893-3573c7ddd629
@@ -2336,7 +2363,6 @@ version = "1.13.0+0"
 # ╟─81d44c35-5dea-4518-9366-6653fc8b5f69
 # ╟─f1ccba5e-38ab-46a7-aa25-3c8fecdc412c
 # ╟─d2e85def-e45f-48f5-9088-4fd9abd5ac56
-# ╠═eea8b0e4-bb9d-43ff-bd0b-1a7f8e1462f9
 # ╠═728a7607-adb4-4c11-aaa5-eb120d0fcdbe
 # ╠═2e11ac23-1b9b-4753-85ae-cd63d3f1c897
 # ╠═97f03469-7b20-4d00-8cdc-f455bcb8f699
