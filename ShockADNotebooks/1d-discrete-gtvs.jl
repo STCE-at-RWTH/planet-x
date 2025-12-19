@@ -34,15 +34,26 @@ using SimpleIntegration
 # ╔═╡ 292898dc-fb6c-41c8-a04f-266ba4c052fa
 import Interpolations
 
+# ╔═╡ 2a3e08e6-2626-45fa-a6f3-8b152d772dc1
+md"""
+# Discrete Tangent Sensitivity Analysis
+"""
+
+# ╔═╡ 80c58feb-f9e6-4f64-8fd5-ddd68ba61866
+PlutoUI.TableOfContents(aside=false)
+
+# ╔═╡ cc3ca582-12f3-48a3-86ec-faddfec278f3
+PlutoUI.TableOfContents()
+
 # ╔═╡ 95b5ca00-8896-4fbd-b9ff-6f3853fc096a
 md"""
-# GTVs (Burger's Equation)
-
 Source materials for this notebook are:
 - Jonathan Hüser's [dissertation](https://publications.rwth-aachen.de/record/848707/files/848707.pdf). DOI `10.18154/RWTH-2022-06229`
 - [Herty, Hüser, et. al.](https://linkinghub.elsevier.com/retrieve/pii/S0021999121000024) DOI `10.1016/j.jcp.2021.110110`
 
 The purpose of this notebook is to demonstrate the numerical concepts behind the above paper and disseratation, to be used to better understand the same concepts in two dimensions.
+
+## Example Problem
 
 We start with Burger's equation:
 ```math
@@ -63,23 +74,13 @@ u_0(x; p) = (1+p)x\mathcal{X}_{[0,1]}(x)
 
 # ╔═╡ 88e11096-d1c1-4120-a25e-a1f0a3435c44
 md"""
+## Analytic Solution
+
 The exact solution is
 ```math
 u(t, x; p) = \frac{(1+p)x}{1+(1+p)t}\mathcal{X}_{[0, \sqrt{1+(1+p)t}]}(x)
 ```
 """
-
-# ╔═╡ edeca56b-d86d-4506-875f-b42f2159b82a
-function Δu_shock(t, p)
-	x_s = sqrt(1+(1+p)*t)
-	return (1+p)*x_s / (1+(1+p)*t)
-end
-
-# ╔═╡ 247aa442-bad4-48e2-955c-e22d02ca58d1
-@bind t_ex Slider(0.0:0.01:2.0; show_value=true, default=0.5)
-
-# ╔═╡ e69274c8-6240-4886-bb6d-8d83b410fa6b
-@bind p_ex Slider(0.0:0.01:0.5; show_value=true)
 
 # ╔═╡ 20061a5a-b40b-46bb-8e5b-75ec3e6a50db
 md"""
@@ -92,9 +93,49 @@ Using the aptly-named ramp initial condition, the solution ``u(t, x; p)`` will d
 # ╔═╡ fe99b12f-c756-4cb3-a532-fe18fd0f3d03
 ξ(t, p) = sqrt(1+(1+p)*t);
 
+# ╔═╡ 9ad2486d-1370-4008-8888-d257cdeb4982
+md"""
+The shock jump height is then
+```math
+\frac{(1+p)\xi(t; p)}{1+(1+p)t} = \frac{(1+p)\sqrt{1+(1+p)t}}{1+(1+p)t} = \frac{1+p}{\sqrt{1+(1+p)t}} = \frac{1+p}{\xi(t;p)}
+```
+"""
+
+# ╔═╡ 0757b407-ed26-407d-a294-b8e15371aed1
+md"""
+## Analytic Sensitivity Analysis
+
+We know, from the analytic solution ``u(t, x; p)``, that the analytic broad tangent is
+```math
+	u^{(1)}_{\mathrm{broad}}(t, x; p) = 
+		\frac{x}{(1+(1+p)t)^2}\mathcal{X}_{[0, ξ(t, p)]}(x) 
+```
+"""
+
+# ╔═╡ edeca56b-d86d-4506-875f-b42f2159b82a
+function Δu_shock(t, p)
+	return (1+p) / ξ(t,p)
+end
+
+# ╔═╡ fb9534f9-ad52-4425-8358-c84f4c5d6d74
+md"""
+### Analytic Generalized Tangent
+
+We can combine ``u^{(1)}_\mathrm{broad}(t, x; p)`` with:
+- the shock sensitivity ``\xi^{(1)}(t; p)``
+- jump height ``\Delta u(t;p)=u(t,\xi^-(t;p); p) - u^+(t, \xi^+(t;p); p)`` 
+- perturbation strength ``p^{(1)}``
+
+to yield the **nonlinear** generalized tangent sensitivity ``u_\mathrm{gen}(t, x; p, p^{(1)})``:
+
+```math
+u^{(1)}_\mathrm{gen}(t, x; p, p^{(1)}) = u^{(1)}_\mathrm{broad}(t,x;p)\cdot p^{(1)} + \Delta u(t;p)\cdot\begin{cases}\mathcal{X}_{\left[\xi,\xi+\xi^{(1)}\cdot p^{(1)}\right]}& \xi^{(1)}(t;p)\cdot p^{(1)} \geq 0 \\ -\mathcal{X}_{\left[\xi+\xi^{(1)}\cdot p^{(1)},\xi\right]} & \xi^{(1)}(t;p)\cdot p^{(1)} < 0\end{cases}
+```
+"""
+
 # ╔═╡ 35159259-8493-4fad-a1fb-25801ef4db13
 md"""
-## Time Stepping Scheme
+## Numerical Solution
 
 We apply extrapolation boundary conditions at either end of the data array for ``U_j^n``.
 """
@@ -127,31 +168,31 @@ We'll benchmark the time stepping procedure... for comparison's sake.
 
 # ╔═╡ ec59f065-d7ae-4b52-b802-54f5b6b024d3
 md"""
-## Numerical Shock Location
+### Numerical Shock Location
 
 The shock speed is given by the Rankine-Hugoniot condition, which gives an ODE for the shock position. We'll solve it using explicit Euler and AD, because we're really cool. 
 """
 
-# ╔═╡ 0757b407-ed26-407d-a294-b8e15371aed1
+# ╔═╡ 368884ba-8e02-432d-92c2-0b13b9134b43
 md"""
-## Discrete Broad Tangent
-
-We know, from the analytic solution ``u(t, x; p)``, that the analytic broad tangent is
-```math
-	u^{(1)}_{\mathrm{broad}}(t, x; p) = 
-		\frac{x}{(1+(1+p)t)^2}\mathcal{X}_{[0, ξ(t, p)]}(x) 
-```
+## Numerical Sensitivity Analysis
 
 Using AD gets us the discrete broad tangent for "free"!
 ```math
 	U^{(1)}_{\mathrm{broad}}(t, x) = \begin{cases} 0 & x\in(\Xi\pm C_r\Delta x^\alpha)\\ U^{(1)}(t, x) & \mathrm{otherwise}\end{cases} 
 ```
 For now, we'll ignore the first branch of ``U^{(1)}_{\mathrm{broad}}`` and simply augment the numerical method to step both ``U`` and ``U^{(1)}``. The CFL safety factor is limited by ``U^{(1)}``.
+
+We'll investigate the performance loss due to the AD calls; the use of `value_and_pushforward!` rather than `jacobian!` should limit the performance impact.
 """
 
-# ╔═╡ 3a38b5e4-a7d0-4dea-b224-c7a0c92b4294
+# ╔═╡ dc2adf0a-05a0-4284-b9c0-e6fb9ef0d0ab
 md"""
-We'll investigate the performance loss due to the AD calls; the use of `value_and_pushforward!` should limit the performance impact.
+### Broad Tangent Convergence
+
+Given that the weak solution ``u(t, x; p)`` has pointwise (sub-)linear convergence, we choose a ``C_r`` and ``\alpha\in(0,1)`` to define a "shock region" ``\left[\Xi-C_r\Delta x^\alpha, \Xi+C_r\Delta x^\alpha\right]`` which will contain the region about the shock location affected by numerical dissipation and dispersion.
+
+The detailed argument for this choice is explained in **Section 1.3.7** of Hüser's thesis, but the main idea is that the numerical method for computing $U(t, x_j)$ "smears" the shock over some number of grid points, and if that number remains constant as ``\Delta x\to0``, the shock region is fully contained by the chosen domain.
 """
 
 # ╔═╡ 5d6030e9-5fd4-48cd-9206-bb48edf23cae
@@ -169,11 +210,13 @@ We know that ``C_t \leq \left(\max_{x}\left|f'(u(\cdot,x))\right|\right)^{-1}`` 
 **Assumption 8** also requires that the choice of ``C_s`` yield
 - pointwise convergence as ``\Delta x\to0`` of ``U(t, x)`` to ``u(t,x;p_0)`` of ``\mathcal O(\Delta x^\alpha)`` for all ``x`` outside the shock region ``\xi(t;p_0)\pm C_s\Delta x^\alpha``
 - ``\mathcal O(1)`` error ``U(t,x)-u(t,x;p_0)`` for all ``x`` inside the shock region ``\xi(t;p_0)\pm C_s\Delta x^\alpha`` as ``\Delta x\to0``
+
+Visually, we can verify this assumption by making sure the region where ``U(t, x_j)`` is "smeared" by the time-stepping method is fully contained within the shock region.
 """
 
 # ╔═╡ 56f9b12f-010f-4f35-9199-8b64e4970e37
 md"""
-## Discrete Shock Sensitivity
+### Discrete Shock Sensitivity
 """
 
 # ╔═╡ 81d44c35-5dea-4518-9366-6653fc8b5f69
@@ -181,23 +224,9 @@ md"""
 Computing the tangent sensitivity ``\Xi^{(1)}`` requires implicitly differentiating the solution to the ODE using the time stepping scheme... see **Definition 39** in Hüser's Ph.D. thesis.
 """
 
-# ╔═╡ dc2adf0a-05a0-4284-b9c0-e6fb9ef0d0ab
-md"""
-### Broad Tangent Convergence
-
-Given that the weak solution ``u(t, x; p)`` has pointwise (sub-)linear convergence, we choose a ``C_r`` and ``\alpha\in(0,1)`` to define a "shock region" ``\left[\Xi-C_r\Delta x^\alpha, \Xi+C_r\Delta x^\alpha\right]`` which will contain the region about the shock location affected by numerical dissipation and dispersion.
-
-The detailed argument for this choice is explained in **Section 1.3.7** of Hüser's thesis, but the main idea is that the numerical method for computing $U(t, x_j)$ "smears" the shock over some number of grid points, and if that number remains constant as ``\Delta x\to0``, the shock region is fully contained by the chosen domain.
-"""
-
-# ╔═╡ fb9534f9-ad52-4425-8358-c84f4c5d6d74
-md"""
-## Analytic Generalized Tangent
-"""
-
 # ╔═╡ 728a7607-adb4-4c11-aaa5-eb120d0fcdbe
 md"""
-## Discrete Generalized Tangent
+### Discrete Generalized Tangent
 """
 
 # ╔═╡ 97f03469-7b20-4d00-8cdc-f455bcb8f699
@@ -240,15 +269,6 @@ function u(t, x, p)
 	return c1 * X(x, 0, c2)
 end
 
-# ╔═╡ 582df058-cd59-4840-b9bb-cb157e2d3867
-let t = t_ex, p=p_ex
-	xs = -1.:0.001:2.
-	fig = plot(xs, Base.Fix2(u0, p); label=L"u_0(x; p)", ls=:dash)
-	plot!(fig, xs, x->u(t, x, p); label=L"u(x, t; p)", ylims=(0., 2.), title=L"u(t, x; p)"*@sprintf("; t=%.2f p=%.2f", t, p), dpi=600)
-	scatter!(fig, [ξ(t, p)], [Δu_shock(t, p)]; label=false)
-	fig
-end
-
 # ╔═╡ df8f9292-30b9-4de5-860a-8fa9725a1153
 @doc raw"""
 	dt_from_cfl(dx, speed, cfl_safety)
@@ -265,10 +285,10 @@ const fdiff_backend = AutoForwardDiff();
 
 # ╔═╡ 2b1c6db8-a963-4c09-aa89-468cb4739859
 # do some bookkeeping to speed up differentiation (good practice)
-const df_prep = DifferentiationInterface.prepare_derivative(f, fdiff_backend, 1.0);
+const df_prep = prepare_derivative(f, fdiff_backend, 1.0);
 
 # ╔═╡ d6568431-a6eb-4121-8033-538b37c53289
-df(u) = DifferentiationInterface.derivative(f, df_prep, fdiff_backend, u);
+df(u) = derivative(f, df_prep, fdiff_backend, u);
 
 # ╔═╡ 48967d88-dccf-496f-a938-8d6d9ee55f03
 begin
@@ -276,8 +296,8 @@ begin
 		return cfl() / maximum(abs∘df, U)
 	end
 
-	function compute_Ct(U::Function, xs; cfl=CFL_SAFETY_FACTOR)
-		return cfl() / maximum(abs∘df∘U, xs)
+	function compute_Ct(u::Function, xs; cfl=CFL_SAFETY_FACTOR)
+		return cfl() / maximum(abs∘df∘u, xs)
 	end
 end
 
@@ -462,6 +482,7 @@ begin
 end
 
 # ╔═╡ cf93d143-5f2f-4346-87ca-d201145b1f0c
+# computing Cr requires knowing the exact solution at time t...
 function compute_Cr(U, t, xs, p; cfl=CFL_SAFETY_FACTOR)
 	u_ex = FixedUExactAt(t, p)
 	A1 = maximum((abs ∘ df ∘ u_ex), xs)
@@ -559,7 +580,7 @@ let param = 0.5, Nx = 1200, T_end = 3.0
 end
 
 # ╔═╡ 35a98d6e-723b-42a7-a0a3-9fdb37851ab5
-let param = 0.5, Nx = 1200, T_end = 3.0
+ let param = 0.5, Nx = 1200, T_end = 3.0
 	xs = range(-2., 4.; length=Nx+1)
 	U = Base.Fix2(u0, param).(xs)
 	Udot = map(xs) do x
@@ -606,15 +627,48 @@ function time_stepping_controls_input(ranges, defaults, vars)
 				c(name, Slider(r; default=d, show_value=true))
 			)
 			"""
-			
 			for (r, d, name)∈zip(ranges, defaults, vars)
 		]
-		
-		md"""
+		return md"""
 		#### Controls for Previous Figure
 		$(inputs)
 		"""
 	end
+end
+
+# ╔═╡ 44f28d9e-4101-46f7-a321-ec058b414884
+@bind exact_inputs time_stepping_controls_input(
+	[0.:0.01:0.5, 0.:0.05:6.0],
+	[0., 0.0],
+	["p", "T"],
+)
+
+# ╔═╡ 582df058-cd59-4840-b9bb-cb157e2d3867
+let t = exact_inputs.T, p=exact_inputs.p
+	xs = -1.:0.005:4.
+	fig = plot(xs, Base.Fix2(u0, p); label=L"u_0(x; p)", ls=:dash)
+	plot!(fig, xs, x->u(t, x, p); label=L"u(x, t; p)", ylims=(0., 2.), title=L"u(t, x; p)"*@sprintf("; t=%.2f p=%.2f", t, p), dpi=600)
+	scatter!(fig, [ξ(t, p)], [Δu_shock(t, p)]; label=false)
+	fig
+end
+
+# ╔═╡ c1e4d0d0-111a-47a9-87db-9a5cf0f72af5
+@bind analytic_gt_inputs time_stepping_controls_input(
+	[0.:0.01:6., 0.0:0.01:2.0, -1.:0.01:1.],
+	[0., 0.0, 0.0],
+	["t", "p_0", "pdot"],
+)
+
+# ╔═╡ e93d9cef-dec3-41f0-bc6c-8cd755c495fb
+let param = analytic_gt_inputs.p_0, t=analytic_gt_inputs.t, pdot=analytic_gt_inputs.pdot
+	xs = range(0., 4.; length=1501)
+	t_str = @sprintf("%.2f", t)
+	p_str = @sprintf("%.2f", param)
+	pdot_str = @sprintf("%.2f", pdot)
+	p = plot(xs, x->u(t, x, param); ylims=(-1.5, 1.5), label=L"u(t, x; p)", title=L"t=%$(t_str), p=%$(p_str), \dot{p}=%$(pdot_str)", legend=:topleft, dpi=600, xlabel=L"x", ylabel="Value (no units)")
+	plot!(p, xs, x->u_generalized(t, x, param, pdot), label=L"\dot{u}_{gen}(t, x; p)")
+	plot!(p, xs, x->u(t, x, param)+u_generalized(t, x, param, pdot), label=L"(u+\dot{u}_{gen})(t, x; p)")
+	p
 end
 
 # ╔═╡ bca7694b-cbc6-4716-b530-17305137a7eb
@@ -695,25 +749,6 @@ let param = broad_inputs.p, Nx = broad_inputs.Nx, T_end = 2.0, α=broad_inputs.�
 	plot!(p, xs, map((x, u)->u*(!X)(x, shock_L, shock_R), xs, Udot); label=L"U_{broad}(t, x_j)")
 	plot!(p, xs, x->u_broad(T_end, x, param), label=L"u_{broad}(t, x)", ls=:dash)
 	vspan!(p, [shock_L, shock_R]; fillalpha=0.1, ls=:dash, lw=1, label="Shock Region")
-	p
-end
-
-# ╔═╡ c1e4d0d0-111a-47a9-87db-9a5cf0f72af5
-@bind analytic_gt_inputs time_stepping_controls_input(
-	[0.:0.01:6., 0.0:0.01:2.0, -1.:0.01:1.],
-	[0., 0.0, 0.0],
-	["t", "p_0", "pdot"],
-)
-
-# ╔═╡ e93d9cef-dec3-41f0-bc6c-8cd755c495fb
-let param = analytic_gt_inputs.p_0, t=analytic_gt_inputs.t, pdot=analytic_gt_inputs.pdot
-	xs = range(-2., 4.; length=1501)
-	t_str = @sprintf("%.2f", t)
-	p_str = @sprintf("%.2f", param)
-	pdot_str = @sprintf("%.2f", pdot)
-	p = plot(xs, x->u(t, x, param); ylims=(-1.5, 1.5), label=L"u(t, x; p)", title=L"t=%$(t_str), p=%$(p_str), \dot{p}=%$(pdot_str)", legend=:topleft, dpi=600, xlabel=L"x", ylabel="Value (no units)")
-	plot!(p, xs, x->u_generalized(t, x, param, pdot), label=L"\dot{u}_{gen}(t, x; p)")
-	plot!(p, xs, x->u(t, x, param)+u_generalized(t, x, param, pdot), label=L"(u+\dot{u}_{gen})(t, x; p)")
 	p
 end
 
@@ -2241,6 +2276,9 @@ version = "1.13.0+0"
 # ╠═bd1eaf9e-5f02-484e-878a-92605b82d917
 # ╠═51f42cc7-6ff6-48f6-8dfd-9cd17c87e6c8
 # ╠═292898dc-fb6c-41c8-a04f-266ba4c052fa
+# ╟─2a3e08e6-2626-45fa-a6f3-8b152d772dc1
+# ╟─80c58feb-f9e6-4f64-8fd5-ddd68ba61866
+# ╠═cc3ca582-12f3-48a3-86ec-faddfec278f3
 # ╟─95b5ca00-8896-4fbd-b9ff-6f3853fc096a
 # ╠═8c3fb8d1-9a1a-41e0-9f28-5cb70b3250ce
 # ╠═2b1c6db8-a963-4c09-aa89-468cb4739859
@@ -2248,15 +2286,20 @@ version = "1.13.0+0"
 # ╟─017b53cc-4d71-4fc9-945c-5b7016726ced
 # ╠═bc7194b7-0e1b-4f26-8c4d-43f282a1b0fa
 # ╟─88e11096-d1c1-4120-a25e-a1f0a3435c44
-# ╠═bf31e3b9-b661-4bb9-949c-0850387129c3
-# ╠═edeca56b-d86d-4506-875f-b42f2159b82a
+# ╟─bf31e3b9-b661-4bb9-949c-0850387129c3
 # ╟─582df058-cd59-4840-b9bb-cb157e2d3867
-# ╠═247aa442-bad4-48e2-955c-e22d02ca58d1
-# ╠═e69274c8-6240-4886-bb6d-8d83b410fa6b
+# ╟─44f28d9e-4101-46f7-a321-ec058b414884
 # ╟─20061a5a-b40b-46bb-8e5b-75ec3e6a50db
 # ╠═fe99b12f-c756-4cb3-a532-fe18fd0f3d03
 # ╠═851b2a88-1aa0-43a1-8a08-5c536a2abc75
 # ╠═4ab76c0d-9de7-4858-9fea-c20e5efeb6e4
+# ╟─9ad2486d-1370-4008-8888-d257cdeb4982
+# ╟─0757b407-ed26-407d-a294-b8e15371aed1
+# ╟─edeca56b-d86d-4506-875f-b42f2159b82a
+# ╟─fb9534f9-ad52-4425-8358-c84f4c5d6d74
+# ╠═0f7ce95b-9d92-4f5a-8811-4bb80787d030
+# ╟─e93d9cef-dec3-41f0-bc6c-8cd755c495fb
+# ╟─c1e4d0d0-111a-47a9-87db-9a5cf0f72af5
 # ╟─35159259-8493-4fad-a1fb-25801ef4db13
 # ╠═72c50045-869b-45f2-97bd-aac2f817f4ba
 # ╟─ba60ee99-2896-451b-a893-3573c7ddd629
@@ -2268,29 +2311,24 @@ version = "1.13.0+0"
 # ╟─bca7694b-cbc6-4716-b530-17305137a7eb
 # ╟─ec59f065-d7ae-4b52-b802-54f5b6b024d3
 # ╠═0f7d6377-63bf-411b-9f4b-aaf2059d8840
-# ╟─0757b407-ed26-407d-a294-b8e15371aed1
-# ╠═0f7ce95b-9d92-4f5a-8811-4bb80787d030
+# ╟─368884ba-8e02-432d-92c2-0b13b9134b43
 # ╟─32523f1f-0451-483e-bb5d-58ac61e07f6c
 # ╟─4f6fd429-269b-4da3-93b0-1df9545f08d0
-# ╟─3a38b5e4-a7d0-4dea-b224-c7a0c92b4294
 # ╟─35a98d6e-723b-42a7-a0a3-9fdb37851ab5
 # ╟─0157f6ab-85a3-49f0-82eb-aa66ad6ad13a
 # ╟─22cdff15-d1bc-4db1-b6c7-62dd1b4ca8d2
+# ╟─dc2adf0a-05a0-4284-b9c0-e6fb9ef0d0ab
 # ╟─5d6030e9-5fd4-48cd-9206-bb48edf23cae
-# ╠═48967d88-dccf-496f-a938-8d6d9ee55f03
-# ╠═b9c376ef-d77e-426f-a794-aeffb67725ce
+# ╟─48967d88-dccf-496f-a938-8d6d9ee55f03
+# ╟─b9c376ef-d77e-426f-a794-aeffb67725ce
 # ╠═cf93d143-5f2f-4346-87ca-d201145b1f0c
 # ╟─50861340-1f49-4a0e-8278-46fe4b0c0811
 # ╟─9f4f6228-ff61-4321-b87b-0b10da84d419
-# ╟─56f9b12f-010f-4f35-9199-8b64e4970e37
+# ╠═56f9b12f-010f-4f35-9199-8b64e4970e37
 # ╟─81d44c35-5dea-4518-9366-6653fc8b5f69
 # ╟─f1ccba5e-38ab-46a7-aa25-3c8fecdc412c
 # ╟─d2e85def-e45f-48f5-9088-4fd9abd5ac56
-# ╟─dc2adf0a-05a0-4284-b9c0-e6fb9ef0d0ab
-# ╟─fb9534f9-ad52-4425-8358-c84f4c5d6d74
 # ╠═eea8b0e4-bb9d-43ff-bd0b-1a7f8e1462f9
-# ╟─e93d9cef-dec3-41f0-bc6c-8cd755c495fb
-# ╟─c1e4d0d0-111a-47a9-87db-9a5cf0f72af5
 # ╠═728a7607-adb4-4c11-aaa5-eb120d0fcdbe
 # ╠═2e11ac23-1b9b-4753-85ae-cd63d3f1c897
 # ╠═97f03469-7b20-4d00-8cdc-f455bcb8f699
