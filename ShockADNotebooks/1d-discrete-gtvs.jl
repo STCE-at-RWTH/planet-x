@@ -644,12 +644,6 @@ function compute_analytic_gtv_l1_error(t, xs, p0, Δp)
 	end
 end
 
-# ╔═╡ 943c0281-1179-425b-838c-5decf0e9a7e9
-let t = 1.0, ps=0:0.25:1.5
-	xs = 0.:0.001:4.
-	@benchmark compute_analytic_gtv_l1_error($t, $xs, 1.0, 0.01)
-end
-
 # ╔═╡ 2d535aaf-00e7-4537-9519-04a5c4a65da6
 function time_stepping_controls_input(ranges, defaults, vars)
 	return PlutoUI.combine() do c
@@ -700,6 +694,26 @@ let param = analytic_gt_inputs.p_0, t=analytic_gt_inputs.t, pdot=analytic_gt_inp
 	plot!(p, xs, x->u_generalized(t, x, param, pdot), label=L"\dot{u}_{gen}(t, x; p)")
 	plot!(p, xs, x->u(t, x, param)+u_generalized(t, x, param, pdot), label=L"(u+\dot{u}_{gen})(t, x; p)")
 	p
+end
+
+# ╔═╡ 7a5977df-3cb3-4d8e-b45e-e63981170304
+@bind cvg_inputs time_stepping_controls_input(
+	[-0.5:0.01:0.5, 0.:0.05:4.0],
+	[0., 1.0],
+	["p", "T"],
+)
+
+# ╔═╡ 943c0281-1179-425b-838c-5decf0e9a7e9
+let t = cvg_inputs.T, p = cvg_inputs.p
+	Δp=[0.25, 0.1, 0.05, 0.025, 0.01, 0.005, 0.0025, 0.001, 0.0005, 0.00025, 0.0001, 0.00005, 0.000025, 0.00001]
+	xs = 0.:5.0e-6:4.
+	data = [compute_analytic_gtv_l1_error(t, xs, p, dp) for dp∈Δp]
+	t_str = @sprintf("%.2f", t)
+	p_str = @sprintf("%.2f", p)
+	fig = plot(Δp, data; xflip=true, yscale=:log10, xscale=:log10, dpi=600, minorgrid=true, marker=:o, label="Error in "*L"\Vert\cdot\Vert_{L_1}", title=L"p_0=%$(p_str), t=%$(t_str)", ylabel=L"\Vert u(t,x;p_0+\Delta p)-u(t,x;p_0)-u^{(1)}_\mathrm{gen}(t,x;p,\Delta p)\Vert_{L_1}", xlabel=L"\Delta p")
+	plot!(fig, Δp, v->0.1*v; ls=:dash, label=L"\mathcal{O}(|\Delta p|)")
+	plot!(fig, Δp, v->0.1*v^2; ls=:dash, label=L"\mathcal{O}(|\Delta p|^2)")
+	fig
 end
 
 # ╔═╡ bca7694b-cbc6-4716-b530-17305137a7eb
@@ -817,7 +831,7 @@ StaticArrays = "~1.9.15"
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.12.2"
+julia_version = "1.12.3"
 manifest_format = "2.0"
 project_hash = "56aaa5235cd926a06e9766ab088a2cca7490e05f"
 
@@ -1683,7 +1697,7 @@ version = "0.44.2+0"
 [[deps.Pkg]]
 deps = ["Artifacts", "Dates", "Downloads", "FileWatching", "LibGit2", "Libdl", "Logging", "Markdown", "Printf", "Random", "SHA", "TOML", "Tar", "UUIDs", "p7zip_jll"]
 uuid = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
-version = "1.12.0"
+version = "1.12.1"
 weakdeps = ["REPL"]
 
     [deps.Pkg.extensions]
@@ -2334,7 +2348,8 @@ version = "1.13.0+0"
 # ╟─c1e4d0d0-111a-47a9-87db-9a5cf0f72af5
 # ╠═9b6746ad-fd16-4bd2-a7b3-4f9315b58ef6
 # ╠═c8a4aa19-fa10-48a4-a905-54d0a38e29e5
-# ╠═943c0281-1179-425b-838c-5decf0e9a7e9
+# ╟─943c0281-1179-425b-838c-5decf0e9a7e9
+# ╟─7a5977df-3cb3-4d8e-b45e-e63981170304
 # ╟─35159259-8493-4fad-a1fb-25801ef4db13
 # ╠═72c50045-869b-45f2-97bd-aac2f817f4ba
 # ╟─ba60ee99-2896-451b-a893-3573c7ddd629
@@ -2343,7 +2358,7 @@ version = "1.13.0+0"
 # ╟─0bb57569-1e3e-4ae6-bd27-b9afbd75a831
 # ╟─b14e2bbf-cd1f-4ba4-b741-1e48e9d1acf0
 # ╟─2efb7bce-e0f1-4aff-bae7-2bc441132b64
-# ╟─bca7694b-cbc6-4716-b530-17305137a7eb
+# ╠═bca7694b-cbc6-4716-b530-17305137a7eb
 # ╟─ec59f065-d7ae-4b52-b802-54f5b6b024d3
 # ╠═0f7d6377-63bf-411b-9f4b-aaf2059d8840
 # ╟─368884ba-8e02-432d-92c2-0b13b9134b43
