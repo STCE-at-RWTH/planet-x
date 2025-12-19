@@ -1,6 +1,14 @@
 ### A Pluto.jl notebook ###
 # v0.20.21
 
+#> [frontmatter]
+#> title = "Discrete Tangent Sensitivity Analysis"
+#> date = "2025-12-19"
+#> description = "Demonstration of the technique developed in Jonathan Hüser's Ph.D. thesis."
+#> 
+#>     [[frontmatter.author]]
+#>     name = "Alexander Fleming"
+
 using Markdown
 using InteractiveUtils
 
