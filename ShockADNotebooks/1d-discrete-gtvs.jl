@@ -145,7 +145,7 @@ u^{(1)}_\mathrm{gen}(t, x; p, p^{(1)}) = u^{(1)}_\mathrm{broad}(t,x;p)\cdot p^{(
 md"""
 ### Convergence of the Analytic Generalized Tangent
 
-We will test this in the ``L_1`` norm.
+We will test this in the ``L_1`` norm. We expect ``\mathcal{O}(|\Delta p|^2)`` convergence.
 """
 
 # ╔═╡ 35159259-8493-4fad-a1fb-25801ef4db13
@@ -2346,8 +2346,8 @@ version = "1.13.0+0"
 # ╠═eea8b0e4-bb9d-43ff-bd0b-1a7f8e1462f9
 # ╟─e93d9cef-dec3-41f0-bc6c-8cd755c495fb
 # ╟─c1e4d0d0-111a-47a9-87db-9a5cf0f72af5
-# ╠═9b6746ad-fd16-4bd2-a7b3-4f9315b58ef6
-# ╠═c8a4aa19-fa10-48a4-a905-54d0a38e29e5
+# ╟─9b6746ad-fd16-4bd2-a7b3-4f9315b58ef6
+# ╟─c8a4aa19-fa10-48a4-a905-54d0a38e29e5
 # ╟─943c0281-1179-425b-838c-5decf0e9a7e9
 # ╟─7a5977df-3cb3-4d8e-b45e-e63981170304
 # ╟─35159259-8493-4fad-a1fb-25801ef4db13
