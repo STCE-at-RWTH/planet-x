@@ -24,23 +24,16 @@ macro bind(def, element)
     #! format: on
 end
 
-# ╔═╡ 79a25182-d5ea-11f0-9c90-8d8fe9898caa
-using LinearAlgebra, Printf, Markdown
-
-# ╔═╡ 182af265-54de-4fd2-8fef-cf4120a8d2ac
-using LaTeXStrings, Plots, PlutoUI
-
-# ╔═╡ 4bdfb681-ad1a-4a8b-81e1-ca7f6f570665
-using DifferentiationInterface, ForwardDiff, StaticArrays
-
-# ╔═╡ bd1eaf9e-5f02-484e-878a-92605b82d917
-using BenchmarkTools, OhMyThreads
-
-# ╔═╡ 51f42cc7-6ff6-48f6-8dfd-9cd17c87e6c8
-using SimpleIntegration
-
-# ╔═╡ 292898dc-fb6c-41c8-a04f-266ba4c052fa
-import Interpolations
+# ╔═╡ 1e9e3a11-a840-4bbc-b1e4-b5a131147642
+begin
+	using LinearAlgebra, Printf, Markdown
+	using LaTeXStrings, PlutoUI, Plots
+	using BenchmarkTools, DifferentiationInterface, OhMyThreads
+	import ForwardDiff
+	using SimpleIntegration
+	using DiscreteGeneralizedSensitivities
+	using DiscreteGeneralizedSensitivities: X, Fixed_t_p, Fixed_t_x
+end
 
 # ╔═╡ 2a3e08e6-2626-45fa-a6f3-8b152d772dc1
 md"""
@@ -61,24 +54,22 @@ Source materials for this notebook are:
 
 The purpose of this notebook is to demonstrate the numerical concepts behind the above paper and disseratation, to be used to better understand the same concepts in two dimensions.
 
+The implementation of `DiscreteGeneralizedSensitivities` is [here](https://github.com/STCE-at-RWTH/DiscreteGeneralizedSensitivities.jl). 
+
 ## Example Problem
 
 We start with Burger's equation:
 ```math
 \partial_t u(t, x) + \partial_x\left(\frac{1}{2}u(t,x)^2\right) = 0
 ```
-"""
-
-# ╔═╡ 8c3fb8d1-9a1a-41e0-9f28-5cb70b3250ce
-f(u) = u^2 / 2;
-
-# ╔═╡ 017b53cc-4d71-4fc9-945c-5b7016726ced
-md"""
 and choose an initial condition parametrized by ``p``: ``u_0(x; p)=u(0, x; p)``:
 ```math
 u_0(x; p) = (1+p)x\mathcal{X}_{[0,1]}(x)
 ```
 """
+
+# ╔═╡ d1dc4c55-df98-4c43-80ba-14b2559b694d
+const burgers_cfg = DiscreteSensitivityBurgers(0.5, 2.0, 1.0, 0.5);
 
 # ╔═╡ 88e11096-d1c1-4120-a25e-a1f0a3435c44
 md"""
@@ -96,13 +87,7 @@ Using the aptly-named ramp initial condition, the solution ``u(t, x; p)`` will d
 ```math
 \xi(t; p) = \sqrt{1+(1+p)t}
 ```
-"""
 
-# ╔═╡ fe99b12f-c756-4cb3-a532-fe18fd0f3d03
-ξ(t, p) = sqrt(1+(1+p)*t);
-
-# ╔═╡ 9ad2486d-1370-4008-8888-d257cdeb4982
-md"""
 The shock jump height is then
 ```math
 \frac{(1+p)\xi(t; p)}{1+(1+p)t} = \frac{(1+p)\sqrt{1+(1+p)t}}{1+(1+p)t} = \frac{1+p}{\sqrt{1+(1+p)t}} = \frac{1+p}{\xi(t;p)}
@@ -119,11 +104,6 @@ We know, from the analytic solution ``u(t, x; p)``, that the analytic broad tang
 		\frac{x}{(1+(1+p)t)^2}\mathcal{X}_{[0, ξ(t, p)]}(x) 
 ```
 """
-
-# ╔═╡ edeca56b-d86d-4506-875f-b42f2159b82a
-function Δu_shock(t, p)
-	return (1+p) / ξ(t,p)
-end
 
 # ╔═╡ fb9534f9-ad52-4425-8358-c84f4c5d6d74
 md"""
@@ -148,6 +128,24 @@ md"""
 We will test this in the ``L_1`` norm. We expect ``\mathcal{O}(|\Delta p|^2)`` convergence.
 """
 
+# ╔═╡ a01465aa-2cf4-442f-a02f-c617dafe7ba7
+function compute_analytic_broad_tangent_l1_error(t, xs, p0, Δp)
+	return norm_L1(xs; threaded=(length(xs) > 2000)) do x
+		u_ex = u_exact(burgers_cfg)(t, x, p0+Δp)
+		u_est = u_exact(burgers_cfg)(t, x, p0) + u_broad(burgers_cfg)(t, x, p0)*Δp
+		return u_ex - u_est
+	end
+end
+
+# ╔═╡ c8a4aa19-fa10-48a4-a905-54d0a38e29e5
+function compute_analytic_gtv_l1_error(t, xs, p0, Δp)
+	return norm_L1(xs; threaded=(length(xs) > 2000)) do x
+		u_ex = u_exact(burgers_cfg)(t, x, p0+Δp)
+		u_est = u_exact(burgers_cfg)(t, x, p0) + u_gen(burgers_cfg)(t, x, p0, Δp)
+		return u_ex - u_est
+	end
+end
+
 # ╔═╡ 35159259-8493-4fad-a1fb-25801ef4db13
 md"""
 ## Numerical Solution
@@ -156,36 +154,31 @@ We apply extrapolation boundary conditions at either end of the data array for `
 """
 
 
-# ╔═╡ 72c50045-869b-45f2-97bd-aac2f817f4ba
-function step_lax_friedrichs!(U_next, U, Δt, Δx)
-	@views map!(U_next[begin+1:end-1], U[begin:end-2], U[begin+2:end]) do U_L, U_R
-		return (U_L+U_R)/2 + Δt/(2*Δx) * (f(U_L) - f(U_R))
-	end
-	# apply extrapolation
-	U_next[begin] = U_next[begin+1]
-	U_next[end] = U_next[end-1]
-	# in-place!
-	return nothing
-end
-
 # ╔═╡ ba60ee99-2896-451b-a893-3573c7ddd629
 md"""
 We also have to choose a CFL safety factor, which will determine part of the relationship between ``\Delta t`` and ``\Delta x``.
 """
-
-# ╔═╡ 45dea67c-cd56-4f06-b097-acbdb284bd8b
-const CFL_SAFETY_FACTOR = Returns(0.5);
 
 # ╔═╡ 0bb57569-1e3e-4ae6-bd27-b9afbd75a831
 md"""
 We'll benchmark the time stepping procedure... for comparison's sake.
 """
 
+# ╔═╡ b14e2bbf-cd1f-4ba4-b741-1e48e9d1acf0
+let param = 0.5, Nx = 1200, T_end = 3.0
+	xs = range(-2., 4.; length=Nx+1)
+	(U, _, _, _) = get_initial_conditions(xs, param, 1.0, burgers_cfg)
+	@benchmark solve_pde!($U, $xs, $T_end, $burgers_cfg)
+end
+
 # ╔═╡ ec59f065-d7ae-4b52-b802-54f5b6b024d3
 md"""
 ### Numerical Shock Location
 
-The shock speed is given by the Rankine-Hugoniot condition, which gives an ODE for the shock position. We'll solve it using explicit Euler and AD, because we're really cool. 
+The shock speed is given by the Rankine-Hugoniot condition, which gives an ODE for the shock position. We'll solve it using explicit Euler and AD, because we're really cool.
+```math
+\Xi(t_{j+1}, p) = \Xi(t_j, p) + Δt*f'\left(U(t_j, \Xi_j)\right)
+```
 """
 
 # ╔═╡ 368884ba-8e02-432d-92c2-0b13b9134b43
@@ -200,6 +193,13 @@ For now, we'll ignore the first branch of ``U^{(1)}_{\mathrm{broad}}`` and simpl
 
 We'll investigate the performance loss due to the AD calls; the use of `value_and_pushforward!` rather than `jacobian!` should limit the performance impact.
 """
+
+# ╔═╡ 35a98d6e-723b-42a7-a0a3-9fdb37851ab5
+ let param = 0.5, Nx = 1200, T_end = 3.0
+	xs = range(-2., 4.; length=Nx+1)
+	(U, Udot, _, _) = get_initial_conditions(xs, param, 1.0, burgers_cfg)
+	@benchmark solve_pde!($U, $Udot, $xs, $T_end, $burgers_cfg)
+end
 
 # ╔═╡ dc2adf0a-05a0-4284-b9c0-e6fb9ef0d0ab
 md"""
@@ -244,405 +244,43 @@ md"""
 ### Discrete Generalized Tangent
 """
 
+# ╔═╡ 6796d969-d5d4-46b3-8ddb-16304ed47b51
+# this is inefficient but the calls to solve_pde! only take a few μs
+# so I don't care
+function compute_discrete_gtv_l1_error(t, xs, p0, pdot, cfg)
+	Cr_guess = 2.0
+	ics = get_initial_conditions(xs, p0, pdot, cfg)
+	(U, Udot, Ξ, Ξdot) = solve_pde!(ics..., xs, t, Cr_guess, cfg)
+	U_gen = GTVClosure(xs, Cr_guess*step(xs)^DiscreteGeneralizedSensitivities.alpha(cfg), U, Udot, Ξ, Ξdot)
+	return norm_L1(xs; threaded=(length(xs) > 2000)) do x
+		u_ex = u_exact(burgers_cfg)(t, x, p0+pdot)
+		u_est = u_exact(burgers_cfg)(t, x, p0) + U_gen(x)
+		return u_ex - u_est
+	end
+end
+
+# ╔═╡ 3566dd4f-b18e-42cb-be69-2ae27b46dcd0
+xs = -0.5:1.0e-5:1.5
+
+# ╔═╡ 521a942f-1b69-4b75-b086-7d4a8ac85135
+Δp=[0.25, 0.1, 0.075, 0.05, 0.025, 0.01, 0.005]
+
+# ╔═╡ 3341992d-c813-4733-9946-263fd38e16e1
+(data_numerical_gtv, data_analytic_broad) = let t = 0.5, p=0.0, Δp=Δp, xs=xs
+	data_gen = tmap(dp->compute_discrete_gtv_l1_error(t, xs, p, dp, burgers_cfg), Δp)
+	data_broad = tmap(dp->compute_analytic_broad_tangent_l1_error(t, xs, p, dp), Δp)
+	(data_gen, data_broad)
+end
+
 # ╔═╡ 97f03469-7b20-4d00-8cdc-f455bcb8f699
 md"""
-## Objective Function Sensitivities
+The discrete generalized tangent offers better convergence behavior than the broad tangent (even the exact broad tangent). However, we must set ``\Delta x`` to be "small" relative to ``p^{(1)}``, which vastly increases compute costs. 
 """
 
 # ╔═╡ e30a83dc-9653-46a1-b50b-84ef6a2df694
 md"""
 # Helper Functions
 """
-
-# ╔═╡ 03f332f8-d75f-4c87-9898-e0c78945c89d
-begin
-	@doc raw"""
-		X(x, a, b)
-		X(x, [a, b]...)
-
-	Characteristic function ``X_{[a,b]}(x)`` returns 1 if ``a \leq x \leq b``.
-	""" function X(x, a, b)
-		a ≤ x ≤ b && return one(x)
-		return zero(x)
-	end;
-	Base.:!(f::typeof(X)) = (x, args...) -> one(x) - X(x, args...);
-	@doc X
-end
-
-# ╔═╡ ebce52b3-2ea9-4ae5-b376-186039eae781
-X(x, ival) = X(x, ival...)
-
-# ╔═╡ bc7194b7-0e1b-4f26-8c4d-43f282a1b0fa
-function u0(x, p)
-	return (1+p)*x*X(x, 0, 1)
-end
-
-# ╔═╡ bf31e3b9-b661-4bb9-949c-0850387129c3
-function u(t, x, p)
-	c1 = (1+p)*x / (1+(1+p)*t)
-	c2 = sqrt(1+(1+p)*t)
-	return c1 * X(x, 0, c2)
-end
-
-# ╔═╡ df8f9292-30b9-4de5-860a-8fa9725a1153
-@doc raw"""
-	dt_from_cfl(dx, speed, cfl_safety)
-
-Computes a time step size from the maximum speed ``a``, minimum ``\Delta x``,
-and a safety factor.
-""" dt_from_cfl
-
-# ╔═╡ d85f38fd-bf4f-4562-b43e-7fc0f606a9b9
-dt_from_cfl(dx, speed, cfl_safety) = cfl_safety * dx / speed
-
-# ╔═╡ 88c033e9-3c36-46a5-81a3-65c244c645f6
-const fdiff_backend = AutoForwardDiff();
-
-# ╔═╡ 2b1c6db8-a963-4c09-aa89-468cb4739859
-# do some bookkeeping to speed up differentiation (good practice)
-const df_prep = prepare_derivative(f, fdiff_backend, 1.0);
-
-# ╔═╡ d6568431-a6eb-4121-8033-538b37c53289
-df(u) = derivative(f, df_prep, fdiff_backend, u);
-
-# ╔═╡ 48967d88-dccf-496f-a938-8d6d9ee55f03
-begin
-	function compute_Ct(U; cfl=CFL_SAFETY_FACTOR)
-		return cfl() / maximum(abs∘df, U)
-	end
-
-	function compute_Ct(u::Function, xs; cfl=CFL_SAFETY_FACTOR)
-		return cfl() / maximum(abs∘df∘u, xs)
-	end
-end
-
-# ╔═╡ b9c376ef-d77e-426f-a794-aeffb67725ce
-function compute_Cs(args...; cfl=CFL_SAFETY_FACTOR, scaling=2.0)
-	return scaling*compute_Ct(args...; cfl=cfl)
-end
-
-# ╔═╡ 851b2a88-1aa0-43a1-8a08-5c536a2abc75
-const dξ_prep = prepare_derivative(Base.Fix1(ξ, 0.0), fdiff_backend, 0.0);
-
-# ╔═╡ 4ab76c0d-9de7-4858-9fea-c20e5efeb6e4
-dξ(t, p) = derivative(Base.Fix1(ξ, t), dξ_prep, fdiff_backend, p);
-
-# ╔═╡ e4225f4e-cf8c-4668-94ef-04c61cb8ba5a
-begin
-	_min_dx(range_x::AbstractRange) = step(range_x)
-	function _min_dx(vec_x::AbstractVector)
-		return @views mapreduce(-, min, vec_x[begin+1:end], vec_x[begin:end-1])
-	end
-end
-
-# ╔═╡ 6066a266-c39c-4869-b26e-7c20562e9723
-function adaptive_step_to_Tend!(U, 
-								xs::AbstractRange, 
-								T_end; 
-								cfl=CFL_SAFETY_FACTOR, 
-								recompute_dt=false)
-	dx = _min_dx(xs)
-	dt = compute_Ct(U) * dx
-	t = zero(T_end)
-	U_temp = similar(U)
-	while true
-		if recompute_dt
-			dt = compute_Ct(U) * dx
-		end
-		if t+dt ≤ T_end
-			step_lax_friedrichs!(U_temp, U, dt, dx)
-			U .= U_temp
-		else
-			step_lax_friedrichs!(U_temp, U, T_end-t, dx)
-			U .= U_temp
-			break
-		end
-		t += dt
-	end
-	return U
-end
-
-# ╔═╡ 32523f1f-0451-483e-bb5d-58ac61e07f6c
-function adaptive_step_to_Tend!(U, Udot, 
-								xs::AbstractRange, 
-								T_end; 
-								cfl=CFL_SAFETY_FACTOR, 
-								recompute_dt=false,
-							   )
-	dx = _min_dx(xs)
-	dt = compute_Ct(U) * dx
-	t = zero(T_end)
-	U_temp = similar(U)
-	Udot_temp = similar(Udot)
-	pf_prep = prepare_pushforward(
-		step_lax_friedrichs!, U_temp, fdiff_backend, U, (Udot,), 
-		Constant(dt), Constant(dx)
-	)
-	while true
-		if recompute_dt
-			dt = compute_Ct(U) * dx
-		end
-		if t+dt < T_end
-			value_and_pushforward!(step_lax_friedrichs!, 
-						 U_temp, (Udot_temp,), pf_prep,
-						 fdiff_backend, U, (Udot,), 
-						 Constant(dt), Constant(dx)
-						)
-			U .= U_temp
-			Udot .= Udot_temp
-		else
-			dt = T_end-t
-			value_and_pushforward!(step_lax_friedrichs!, 
-						 U_temp, (Udot_temp,), pf_prep,
-						 fdiff_backend, U, (Udot,), 
-						 Constant(dt), Constant(dx)
-						)
-			U .= U_temp
-			Udot .= Udot_temp
-			break
-		end
-		t += dt
-	end
-	return (U, Udot)
-end
-
-# ╔═╡ cf21bcfb-382c-425e-9ab7-4652d34061d5
-function fdiff_eps(arg::T) where {T<:Real}
-    cbrt_eps = cbrt(eps(T))
-    h = 2^(round(log2((1 + abs(arg)) * cbrt_eps)))
-    return h
-end
-
-# ╔═╡ 562c2874-f29b-4d04-b3ca-caf27dabaa04
-function piecewise_constant_interp(data, xs)
-	return Interpolations.scale(
-		Interpolations.interpolate(
-			data, Interpolations.BSpline(Interpolations.Constant())
-		), xs)
-end
-
-# ╔═╡ 0f7d6377-63bf-411b-9f4b-aaf2059d8840
-function step_shock_location(Ξ, U, xs, Δt)
-	U_shock = piecewise_constant_interp(U, xs)(Ξ)
-	# ∇_u f(u) is done via AD!
-	return Ξ + Δt * df(U_shock)
-end
-
-# ╔═╡ f1ccba5e-38ab-46a7-aa25-3c8fecdc412c
-function step_shock_sensitivity(Ξdot, Ξ, U, Udot, xs, Δt, Cr, α)
-	dx = _min_dx(xs)
-	ΞL = Ξ - Cr * dx^α
-	ΞR = Ξ + Cr * dx^α
-	width = 2 * Cr * dx^α
-
-	U_const = piecewise_constant_interp(U, xs)
-	Udot_const = piecewise_constant_interp(Udot, xs)
-	
-	UL = U_const(ΞL)
-	UL_far = U_const(ΞL-2*dx)
-	UR = U_const(ΞR)
-	UR_far = U_const(ΞR+2*dx)
-	ΔU_shock = UL-UR
-
-	dUdx_L = (UL - UL_far)/(2*dx)
-	dUdx_R = (UR_far - UR)/(2*dx)
-
-	UdotL = Udot_const(ΞL)
-	UdotR = Udot_const(ΞR)
-
-	dfL = df(UL)
-	dfR = df(UR)
-
-	Ξdot += Δt * (
-		(dfL*(dUdx_L*Ξdot + UdotL)) / ΔU_shock -
-		(dfR*(dUdx_R*Ξdot + UdotR)) / ΔU_shock -
-		(dfL - dfR) / (ΔU_shock^2) * (
-			dUdx_L*Ξdot + UdotL -
-			dUdx_R*Ξdot - UdotR
-		)
-	)
-	return Ξdot
-end
-
-# ╔═╡ 2e11ac23-1b9b-4753-85ae-cd63d3f1c897
-begin
-	struct GeneralizedDiscreteTangent{T, U, UDOT, XT}
-		xs::XT
-		t::T
-		U::U
-		Udot::U
-		Ξ::T
-		Ξdot::T
-		α::T
-		Cr::T
-	end
-
-	function (U_gen::GeneralizedDiscreteTangent{T, U, UD, V})(x) where {T, U, UD, V}
-		U_const = piecewise_constant_interp(U_gen.U, U_gen.xs)
-		Udot_const = piecewise_constant_interp(U_gen.Udot, U_gen.xs)
-		Δx = _min_step_size(U_gen.xs)
-		Δ = U_gen.Cr*Δx^U_gen.α
-		
-	end
-end
-
-# ╔═╡ e47267d6-42f9-4420-a7e2-cce3ddec95c8
-begin
-	struct FixedUExactAt{T}
-		t::T
-		p::T
-	end
-	function (u_ex::FixedUExactAt{T})(x) where {T}
-		return u(u_ex.t, x, u_ex.p)
-	end
-end
-
-# ╔═╡ cf93d143-5f2f-4346-87ca-d201145b1f0c
-# computing Cr requires knowing the exact solution at time t...
-function compute_Cr(U, t, xs, p; cfl=CFL_SAFETY_FACTOR)
-	u_ex = FixedUExactAt(t, p)
-	A1 = maximum((abs ∘ df ∘ u_ex), xs)
-	A2 = 2 + maximum((abs ∘ df), U)
-	A = max(A1, A2)
-	return (A+1)*compute_Cs(U; cfl=cfl)
-end
-
-# ╔═╡ 4f6fd429-269b-4da3-93b0-1df9545f08d0
-function adaptive_step_to_Tend!(U, Udot, Ξ,
-								xs::AbstractRange,
-								T_end, p; 
-								cfl=CFL_SAFETY_FACTOR, 
-								recompute_dt=false,
-							   )
-	dx = _min_dx(xs)
-	dt = compute_Ct(U; cfl=cfl) * dx
-	t = zero(T_end)
-	Cr = compute_Cr(U, t, xs, p; cfl=cfl)
-	U_temp = similar(U)
-	Udot_temp = similar(Udot)
-	pf_prep = prepare_pushforward(
-		step_lax_friedrichs!, U_temp, fdiff_backend, U, (Udot,), 
-		Constant(dt), Constant(dx)
-	)
-	stepping = true
-	while stepping
-		if recompute_dt
-			dt = compute_Ct(U) * dx
-		end
-		Cr = max(Cr, compute_Cr(U, t, xs, p; cfl=cfl))
-		if t+dt >= T_end
-			dt = T_end-t
-			stepping=false
-		end
-		Ξ = step_shock_location(Ξ, U, xs, dt)
-		value_and_pushforward!(step_lax_friedrichs!, 
-							   U_temp, (Udot_temp,), pf_prep,
-							   fdiff_backend, U, (Udot,), 
-							   Constant(dt), Constant(dx)
-							  )
-		U .= U_temp
-		Udot .= Udot_temp
-		t += dt
-	end
-	return (U, Udot, Ξ, Cr)
-end
-
-# ╔═╡ d2e85def-e45f-48f5-9088-4fd9abd5ac56
-function adaptive_step_to_Tend!(U, Udot, Ξ, Ξdot,
-								xs::AbstractRange,
-								T_end, p0, α;
-								cfl=CFL_SAFETY_FACTOR, 
-								recompute_dt=false,
-							   )
-	dx = _min_dx(xs)
-	dt = compute_Ct(U) * dx
-	Cr = compute_Cr(U, t, xs, p0; cfl=cfl)
-	t = zero(T_end)
-	U_temp = similar(U)
-	Udot_temp = similar(Udot)
-	pf_prep = prepare_pushforward(
-		step_lax_friedrichs!, U_temp, fdiff_backend, U, (Udot,), 
-		Constant(dt), Constant(dx)
-	)
-	stepping = true
-	while stepping
-		if recompute_dt
-			dt = compute_Ct(U) * dx
-		end
-		Cr = max(Cr, compute_Cr(U, t, xs, p0; cfl=cfl))
-		if t+dt >= T_end
-			dt = T_end-t
-			stepping = false
-		end
-		value_and_pushforward!(step_lax_friedrichs!,
-							   U_temp, (Udot_temp,), pf_prep,
-							   fdiff_backend, U, (Udot,), 
-							   Constant(dt), Constant(dx)
-							  )
-		Ξdot = step_shock_sensitivity(Ξdot, Ξ, U, Udot, xs, dt, Cr, α)
-		Ξ = step_shock_location(Ξ, U, xs, dt)
-		U .= U_temp
-		Udot .= Udot_temp
-		t += dt
-	end
-	return (U, Udot, Ξ, Ξdot, Cr)
-end
-
-# ╔═╡ b14e2bbf-cd1f-4ba4-b741-1e48e9d1acf0
-let param = 0.5, Nx = 1200, T_end = 3.0
-	xs = range(-2., 4.; length=Nx+1)
-	U = Base.Fix2(u0, param).(xs)
-	@benchmark adaptive_step_to_Tend!($U, $xs, $T_end)
-end
-
-# ╔═╡ 35a98d6e-723b-42a7-a0a3-9fdb37851ab5
- let param = 0.5, Nx = 1200, T_end = 3.0
-	xs = range(-2., 4.; length=Nx+1)
-	U = Base.Fix2(u0, param).(xs)
-	Udot = map(xs) do x
-		derivative(Base.Fix1(u0, x), fdiff_backend, param)
-	end
-	@benchmark adaptive_step_to_Tend!($U, $Udot, $xs, $T_end)
-end
-
-# ╔═╡ 7e9db277-3a3a-4d5b-8f6f-2a0ae6bd3ad7
-begin
-	struct FixedUExactAtTX{T}
-		t::T
-		x::T
-	end
-	function (u_ex::FixedUExactAtTX{T})(p) where {T}
-		return u(u_ex.t, u_ex.x, p)
-	end
-end
-
-# ╔═╡ 0f7ce95b-9d92-4f5a-8811-4bb80787d030
-function u_broad(t, x, p)
-	u_fix = FixedUExactAtTX(t, x)
-	return X(x, 0, ξ(t, p)) * derivative(u_fix, fdiff_backend, p)
-end;
-
-# ╔═╡ eea8b0e4-bb9d-43ff-bd0b-1a7f8e1462f9
-function u_generalized(t, x, p, pdot=1)
-	res = u_broad(t, x, p)*pdot
-	Δ = Δu_shock(t, p)
-	ξdot = dξ(t, p)*pdot
-	if ξdot > 0
-		res += X(x, ξ(t, p), ξ(t, p)+ξdot)*Δ
-	elseif ξdot < 0
-		res -= X(x, ξ(t, p)+ξdot, ξ(t,p))*Δ
-	end
-	return res
-end
-
-# ╔═╡ c8a4aa19-fa10-48a4-a905-54d0a38e29e5
-function compute_analytic_gtv_l1_error(t, xs, p0, Δp)
-	return norm_L1(xs; threaded=(length(xs) > 2000)) do x
-		u_ex = u(t, x, p0+Δp)
-		u_est = u(t, x, p0) + u_generalized(t, x, p0, Δp)
-		return u_ex - u_est
-	end
-end
 
 # ╔═╡ 2d535aaf-00e7-4537-9519-04a5c4a65da6
 function time_stepping_controls_input(ranges, defaults, vars)
@@ -664,57 +302,23 @@ end
 # ╔═╡ 44f28d9e-4101-46f7-a321-ec058b414884
 @bind exact_inputs time_stepping_controls_input(
 	[0.:0.01:0.5, 0.:0.05:6.0],
-	[0., 0.0],
-	["p", "T"],
-)
-
-# ╔═╡ 582df058-cd59-4840-b9bb-cb157e2d3867
-let t = exact_inputs.T, p=exact_inputs.p
-	xs = -1.:0.005:4.
-	fig = plot(xs, Base.Fix2(u0, p); label=L"u_0(x; p)", ls=:dash)
-	plot!(fig, xs, x->u(t, x, p); label=L"u(x, t; p)", ylims=(0., 2.), title=L"u(t, x; p)"*@sprintf("; t=%.2f p=%.2f", t, p), dpi=600)
-	scatter!(fig, [ξ(t, p)], [Δu_shock(t, p)]; label=false)
-	fig
-end
-
-# ╔═╡ c1e4d0d0-111a-47a9-87db-9a5cf0f72af5
-@bind analytic_gt_inputs time_stepping_controls_input(
-	[0.:0.01:6., 0.0:0.01:2.0, -1.:0.01:1.],
-	[0., 0.0, 0.0],
-	["t", "p_0", "pdot"],
-)
-
-# ╔═╡ e93d9cef-dec3-41f0-bc6c-8cd755c495fb
-let param = analytic_gt_inputs.p_0, t=analytic_gt_inputs.t, pdot=analytic_gt_inputs.pdot
-	xs = range(0., 4.; length=1501)
-	t_str = @sprintf("%.2f", t)
-	p_str = @sprintf("%.2f", param)
-	pdot_str = @sprintf("%.2f", pdot)
-	p = plot(xs, x->u(t, x, param); ylims=(-1.5, 1.5), label=L"u(t, x; p)", title=L"t=%$(t_str), p=%$(p_str), \dot{p}=%$(pdot_str)", legend=:topleft, dpi=600, xlabel=L"x", ylabel="Value (no units)")
-	plot!(p, xs, x->u_generalized(t, x, param, pdot), label=L"\dot{u}_{gen}(t, x; p)")
-	plot!(p, xs, x->u(t, x, param)+u_generalized(t, x, param, pdot), label=L"(u+\dot{u}_{gen})(t, x; p)")
-	p
-end
-
-# ╔═╡ 7a5977df-3cb3-4d8e-b45e-e63981170304
-@bind cvg_inputs time_stepping_controls_input(
-	[-0.5:0.01:0.5, 0.:0.05:4.0],
 	[0., 1.0],
 	["p", "T"],
 )
 
-# ╔═╡ 943c0281-1179-425b-838c-5decf0e9a7e9
-let t = cvg_inputs.T, p = cvg_inputs.p
-	Δp=[0.25, 0.1, 0.05, 0.025, 0.01, 0.005, 0.0025, 0.001, 0.0005, 0.00025, 0.0001, 0.00005, 0.000025, 0.00001]
-	xs = 0.:5.0e-6:4.
-	data = [compute_analytic_gtv_l1_error(t, xs, p, dp) for dp∈Δp]
-	t_str = @sprintf("%.2f", t)
-	p_str = @sprintf("%.2f", p)
-	fig = plot(Δp, data; xflip=true, yscale=:log10, xscale=:log10, dpi=600, minorgrid=true, marker=:o, label="Error in "*L"\Vert\cdot\Vert_{L_1}", title=L"p_0=%$(p_str), t=%$(t_str)", ylabel=L"\Vert u(t,x;p_0+\Delta p)-u(t,x;p_0)-u^{(1)}_\mathrm{gen}(t,x;p,\Delta p)\Vert_{L_1}", xlabel=L"\Delta p")
-	plot!(fig, Δp, v->0.1*v; ls=:dash, label=L"\mathcal{O}(|\Delta p|)")
-	plot!(fig, Δp, v->0.1*v^2; ls=:dash, label=L"\mathcal{O}(|\Delta p|^2)")
-	fig
-end
+# ╔═╡ c1e4d0d0-111a-47a9-87db-9a5cf0f72af5
+@bind analytic_gt_inputs time_stepping_controls_input(
+	[0.:0.01:6., 0.0:0.01:2.0, -1.:0.01:1.],
+	[1.0, 0.0, 0.5],
+	["t", "p_0", "pdot"],
+)
+
+# ╔═╡ 7a5977df-3cb3-4d8e-b45e-e63981170304
+@bind cvg_inputs time_stepping_controls_input(
+	[0.:0.01:1.0, 0.:0.05:4.0],
+	[0., 1.0],
+	["p", "T"],
+)
 
 # ╔═╡ bca7694b-cbc6-4716-b530-17305137a7eb
 @bind primal_inputs time_stepping_controls_input(
@@ -723,47 +327,12 @@ end
 	["p", "Nx", "T"],
 )
 
-# ╔═╡ 2efb7bce-e0f1-4aff-bae7-2bc441132b64
-let param = primal_inputs.p, Nx = primal_inputs.Nx, T_end = primal_inputs.T
-	xs = range(-2., 4.; length=Nx+1)
-	U = Base.Fix2(u0, param).(xs)
-	adaptive_step_to_Tend!(U, xs, T_end)
-	t_str = @sprintf("%.2f", T_end)
-	p_str = @sprintf("%.2f", param)
-	dx_str = @sprintf("%.4f", step(xs))
-	p = plot(xs, U; ylims=(0., 1.5), label=L"U(t, x_j)", title=L"t=%$(t_str), p=%$(p_str), \Delta x=%$(dx_str)")
-	plot!(p, xs, x->u(T_end, x, param); label=L"u_{exact}(t, x)", dpi=600, ls=:dash)
-	p
-end
-
 # ╔═╡ 22cdff15-d1bc-4db1-b6c7-62dd1b4ca8d2
 @bind tangent_inputs time_stepping_controls_input(
 	AbstractRange[0.:0.01:0.5, 100:10:1990, 0.:0.05:6.0],
 	Number[0., 1500, 1.0],
 	["p", "Nx", "T"],
 )
-
-# ╔═╡ 0157f6ab-85a3-49f0-82eb-aa66ad6ad13a
-let param = tangent_inputs.p, Nx = tangent_inputs.Nx, T_end = tangent_inputs.T
-	xs = range(-2., 4.; length=Nx+1)
-	U = Base.Fix2(u0, param).(xs)
-	Udot = map(xs) do x
-		derivative(Base.Fix1(u0, x), fdiff_backend, param)
-	end
-	Ξ = ξ(zero(T_end), param)
-	(_, _, Ξ, Cr) = adaptive_step_to_Tend!(U, Udot, Ξ, xs, T_end, param)
-	t_str = @sprintf("%.2f", T_end)
-	p_str = @sprintf("%.2f", param)
-	dx_str = @sprintf("%.4f", step(xs))
-	Cr_str = @sprintf("%.2f", Cr)
-	p = plot(xs, U; ylims=(0., 1.5), label=L"U(t, x_j)", title=L"t=%$(t_str), p=%$(p_str), \Delta x=%$(dx_str), C_r=%$(Cr_str)", legend=:topright, dpi=600, xlabel=L"x", ylabel="Value (no units)")
-	plot!(p, xs, x->u(T_end, x, param); label=L"u_{exact}(t, x)", ls=:dash)
-	plot!(p, xs, Udot; label=L"U^{(1)}(t, x_j)")
-	plot!(p, xs, x->u_broad(T_end, x, param), label=L"u_{broad}(t, x)", ls=:dash)
-	scatter!(p, [Ξ], [0.5*maximum(U)]; marker=:x, ms=6, msw=2, label=L"\Xi(t, p)")
-	scatter!(p, [ξ(T_end, param)], [0.5*maximum(U)]; marker=:circ, label=L"\xi(t,p)")
-	p
-end
 
 # ╔═╡ 9f4f6228-ff61-4321-b87b-0b10da84d419
 @bind broad_inputs time_stepping_controls_input(
@@ -772,29 +341,150 @@ end
 	["p", "Nx", "α"],
 )
 
-# ╔═╡ 50861340-1f49-4a0e-8278-46fe4b0c0811
-let param = broad_inputs.p, Nx = broad_inputs.Nx, T_end = 2.0, α=broad_inputs.α
+# ╔═╡ feafb65b-6a32-41e3-a81f-0b943441ffc0
+function get_plot_style_kwargs()
+	return (
+		dpi=600,
+		size=(900, 800),
+		legendfontsize=16,
+		tickfontsize=14,
+		titlefontsize=20,
+		ylabelfontsize=20,
+		xlabelfontsize=20,
+	)
+end
+
+# ╔═╡ 582df058-cd59-4840-b9bb-cb157e2d3867
+let t = exact_inputs.T, p=exact_inputs.p
+	xs = -1.:0.005:3.
+	u0 = Fixed_t_p(u_exact(burgers_cfg), 0.0, p)
+	fig = plot(xs, x->u0(x); label=L"u_0(x; p)", ls=:dash, lw=2)
+	plot!(fig, xs, x->u_exact(burgers_cfg)(t, x, p); 
+		  label=L"u(x, t; p)", ylims=(0., 2.), 
+		  title=L"u(t, x; p)"*@sprintf("; t=%.2f p=%.2f", t, p),
+		  lw=2,
+		  get_plot_style_kwargs()...)
+	scatter!(fig, [ξ(burgers_cfg)(t, p)], [jump_size(burgers_cfg)(t, p)]; label=false)
+	fig
+end
+
+# ╔═╡ e93d9cef-dec3-41f0-bc6c-8cd755c495fb
+let param = analytic_gt_inputs.p_0, t=analytic_gt_inputs.t, pdot=analytic_gt_inputs.pdot
+	xs = range(0., 2.5; length=4001)
+	t_str = @sprintf("%.2f", t)
+	p_str = @sprintf("%.2f", param)
+	pdot_str = @sprintf("%.2f", pdot)
+	p = plot(xs, x->u_exact(burgers_cfg)(t, x, param); ylims=(-1.5, 1.5), label=L"u(t, x; p)", title=L"t=%$(t_str), p=%$(p_str), \dot{p}=%$(pdot_str)", legend=:topleft, dpi=600, xlabel=L"x", ylabel="Value (no units)", lw=2, get_plot_style_kwargs()...)
+	plot!(p, xs, x->u_gen(burgers_cfg)(t, x, param, pdot), label=L"\dot{u}_{gen}(t, x; p)", lw=2)
+	plot!(p, xs, x->u_exact(burgers_cfg)(t, x, param)+u_gen(burgers_cfg)(t, x, param, pdot), label=L"(u+\dot{u}_{gen})(t, x; p)", ls=:dash, lw=2)
+	p
+end
+
+# ╔═╡ 943c0281-1179-425b-838c-5decf0e9a7e9
+let t = cvg_inputs.T, p = cvg_inputs.p
+	Δp=[0.25, 0.1, 0.05, 0.025, 0.01, 0.005, 0.0025, 0.001, 0.0005, 0.00025, 0.0001, 0.00005, 0.000025, 0.00001]
+	xs = -0.5:5.0e-6:4.
+	data_gen = map(dp->compute_analytic_gtv_l1_error(t, xs, p, dp), Δp)
+	data_broad = map(dp->compute_analytic_broad_tangent_l1_error(t, xs, p, dp), Δp)
+	t_str = @sprintf("%.2f", t)
+	p_str = @sprintf("%.2f", p)
+	fig = plot(Δp, data_gen; xflip=true, yscale=:log10, xscale=:log10, dpi=600, minorgrid=true, marker=:o, label="Estimate with "*L"u^{(1)}_\mathrm{gen}", title=L"t=%$(t_str), p_0=%$(p_str)", ylabel=L"\Vert u(t, x, p_0+p^{(1)}) - u_\mathrm{est}(t, x, p_0+p^{(1)})\Vert_{L_1}", xlabel=L"p^{(1)}", legend=:bottomleft, lw=2, ms=6, get_plot_style_kwargs()...)
+	plot!(fig, Δp, data_broad; marker=:o, label="Estimate only with "*L"u^{(1)}_\mathrm{broad}", lw=2, ms=6)
+	plot!(fig, Δp, v->0.1*v; ls=:dashdot, label=L"\mathcal{O}(|p^{(1)}|)", lw=4)
+	plot!(fig, Δp, v->0.1*v^2; ls=:dashdot, label=L"\mathcal{O}(|p^{(1)}|^2)", lw=4)
+	fig
+end
+
+# ╔═╡ 2efb7bce-e0f1-4aff-bae7-2bc441132b64
+let param = primal_inputs.p, Nx = primal_inputs.Nx, T_end = primal_inputs.T
 	xs = range(-2., 4.; length=Nx+1)
-	U = Base.Fix2(u0, param).(xs)
-	Udot = map(xs) do x
-		derivative(Base.Fix1(u0, x), fdiff_backend, param)
-	end
-	Ξ = ξ(zero(T_end), param)
-	Ξdot = derivative(p->ξ(zero(T_end), p), fdiff_backend, param)
-	(_, _, Ξ, C_r) = adaptive_step_to_Tend!(U, Udot, Ξ, xs, T_end, param)
-	shock_L = Ξ-C_r*step(xs)^α
-	shock_R = Ξ+C_r*step(xs)^α
+	U = Fixed_t_p(u_exact(burgers_cfg), 0.0, param).(xs)
+	solve_pde!(U, xs, T_end, burgers_cfg)
 	t_str = @sprintf("%.2f", T_end)
 	p_str = @sprintf("%.2f", param)
 	dx_str = @sprintf("%.4f", step(xs))
-	C_r_str = @sprintf("%.2f", C_r)
-	α_str = @sprintf("%.2f", α)
-	p = plot(xs, U; ylims=(0., 1.5), label=L"U(t, x_j)", title=L"t=%$(t_str), p=%$(p_str), \Delta x=%$(dx_str), C_r=%$(C_r_str), \alpha=%$(α_str)", legend=:topleft, dpi=600, xlabel=L"x", ylabel="Value (no units)")
-	plot!(p, xs, x->u(T_end, x, param); label=L"u_{exact}(t, x)", ls=:dash)
-	plot!(p, xs, map((x, u)->u*(!X)(x, shock_L, shock_R), xs, Udot); label=L"U_{broad}(t, x_j)")
-	plot!(p, xs, x->u_broad(T_end, x, param), label=L"u_{broad}(t, x)", ls=:dash)
-	vspan!(p, [shock_L, shock_R]; fillalpha=0.1, ls=:dash, lw=1, label="Shock Region")
+	p = plot(xs, U; ylims=(0., 1.5), label=L"U(t, x_j)", title=L"t=%$(t_str), p=%$(p_str), \Delta x=%$(dx_str)", lw=4, get_plot_style_kwargs()...)
+	plot!(p, xs, x->Fixed_t_p(u_exact(burgers_cfg), T_end, param)(x); label=L"u_{exact}(t, x)", ls=:dash, lw=4)
 	p
+end
+
+# ╔═╡ 0157f6ab-85a3-49f0-82eb-aa66ad6ad13a
+let param = tangent_inputs.p, Nx = tangent_inputs.Nx, T_end = tangent_inputs.T
+	xs = range(-2., 4.; length=Nx+1)
+	(U, Udot, Ξ, Ξdot) = get_initial_conditions(xs, param, 1.0, burgers_cfg)
+	(_, Cr) = solve_pde_and_estimate_Cr!(copy(U), xs, T_end, param, 2.0, burgers_cfg)
+	(U, Udot, Ξ, Ξdot) = solve_pde!(U, Udot, Ξ, Ξdot, xs, T_end, Cr, burgers_cfg)
+	t_str = @sprintf("%.2f", T_end)
+	p_str = @sprintf("%.2f", param)
+	dx_str = @sprintf("%.4f", step(xs))
+	Cr_str = @sprintf("%.2f", Cr)
+	p = plot(xs, U; ylims=(0., 1.5), label=L"U(t, x_j)", title=L"t=%$(t_str), p=%$(p_str), \Delta x=%$(dx_str), C_r=%$(Cr_str)", legend=:topright, dpi=600, xlabel=L"x", ylabel="Value (no units)", lw=4, get_plot_style_kwargs()...)
+	plot!(p, xs, x->u_exact(burgers_cfg)(T_end, x, param); label=L"u_{exact}(t, x)", ls=:dash, lw=4)
+	plot!(p, xs, Udot; label=L"U^{(1)}(t, x_j)", lw=4)
+	plot!(p, xs, x->u_broad(burgers_cfg)(T_end, x, param), label=L"u_{broad}(t, x)", ls=:dash, lw=4)
+	scatter!(p, [Ξ], [0.5*maximum(U)]; marker=:x, ms=12, msw=2, label=L"\Xi(t, p)")
+	scatter!(p, [ξ(burgers_cfg)(T_end, param)], [0.5*maximum(U)]; marker=:circ, label=L"\xi(t,p)", ms=6, msw=1)
+	p
+end
+
+# ╔═╡ 50861340-1f49-4a0e-8278-46fe4b0c0811
+let param = broad_inputs.p, Nx = broad_inputs.Nx, T_end = 1.0, α=broad_inputs.α
+	xs = range(-2., 4.; length=Nx+1)
+	(U, Udot, Ξ, Ξdot) = get_initial_conditions(xs, param, 1.0, burgers_cfg)
+	(_, Cr) = solve_pde_and_estimate_Cr!(copy(U), xs, T_end, param, 2.0, burgers_cfg)
+	(U, Udot, Ξ, Ξdot) = solve_pde!(U, Udot, Ξ, Ξdot, xs, T_end, Cr, burgers_cfg)
+	shock_L = Ξ-Cr*step(xs)^α
+	shock_R = Ξ+Cr*step(xs)^α
+	t_str = @sprintf("%.2f", T_end)
+	p_str = @sprintf("%.2f", param)
+	dx_str = @sprintf("%.4f", step(xs))
+	C_r_str = @sprintf("%.2f", Cr)
+	α_str = @sprintf("%.2f", α)
+	p = plot(xs, U; ylims=(0., 1.5), label=L"U(t, x_j)", title=L"t=%$(t_str), p=%$(p_str), \Delta x=%$(dx_str), C_r=%$(C_r_str), \alpha=%$(α_str)", legend=:topleft, xlabel=L"x", ylabel="Value (no units)", lw=4, get_plot_style_kwargs()...)
+	plot!(p, xs, x->u_exact(burgers_cfg)(T_end, x, param); label=L"u_{exact}(t, x)", ls=:dash, lw=4)
+	plot!(p, xs, map((x, u)->u*(!X)(x, shock_L, shock_R), xs, Udot); label=L"U_{broad}(t, x_j)", lw=4)
+	plot!(p, xs, x->u_broad(burgers_cfg)(T_end, x, param), label=L"u_{broad}(t, x)", ls=:dash, lw=4)
+	vspan!(p, [shock_L, shock_R]; fillalpha=0.1, ls=:dash, lw=2, label="Shock Region")
+	p
+end
+
+# ╔═╡ 99f59e0e-a29a-4bf7-a891-aecf60961c45
+let p = 0.0, t=1.0, pdot=1.0, Cr_guess = 2.0	
+	xs = range(-0.5, 2.5; length=5001)
+	ics = get_initial_conditions(xs, p, pdot, burgers_cfg)
+	(U, Udot, Ξ, Ξdot) = solve_pde!(ics..., xs, t, Cr_guess, burgers_cfg)
+	U_gen = GTVClosure(
+		xs, 
+		Cr_guess*step(xs)^DiscreteGeneralizedSensitivities.alpha(burgers_cfg), 
+		U,
+		Udot, 
+		Ξ, 
+		Ξdot
+	)
+	Δ = Cr_guess * step(xs)^DiscreteGeneralizedSensitivities.alpha(burgers_cfg)
+	U_num = DiscreteGeneralizedSensitivities.piecewise_constant_interp(U, xs)
+	U_broad(x) = let Udot = Udot, xs=xs, Ξ = Ξ, Δ = Δ
+		(!X)(x, Ξ-Δ, Ξ+Δ) * DiscreteGeneralizedSensitivities.piecewise_constant_interp(Udot, xs)(x)
+	end
+	xs2 = range(-0.5, 2.5; length=1000)
+	t_str = @sprintf("%.2f", t)
+	p_str = @sprintf("%.2f", p)
+	pdot_str = @sprintf("%.2f", pdot)
+	fig = plot(xs, x->U_num(x); ylims=(-0.5, 1.5), label=L"U(t, x; p)", title=L"t=%$(t_str), p=%$(p_str), p^{(1)}=%$(pdot_str)", legend=:topleft, dpi=600, xlabel=L"x", ylabel="Value (no units)", lw=0, get_plot_style_kwargs()...)
+	plot!(fig, xs2, x->U_gen(x), label=L"{U}^{(1)}_{gen}(t, x; p)", lw=2)
+	plot!(fig, xs2, x->u_exact(burgers_cfg)(t, x, p) + U_gen(x), label=L"(u+U^{(1)}_{gen})(t, x; p)", ls=:dash, lw=2)
+	fig
+end
+
+# ╔═╡ d8af2219-d772-49f2-9c6c-2f842882f4da
+let t = 0.5, p = 0.0, Δp=Δp, xs=xs, data_gen=data_numerical_gtv, data_broad=data_analytic_broad
+	t_str = @sprintf("%.2f", t)
+	p_str = @sprintf("%.2f", p)
+	fig = plot(Δp, data_gen; xflip=true, yscale=:log10, xscale=:log10, dpi=600, minorgrid=true, marker=:o, label="Estimate with discrete "*L"U^{(1)}_\mathrm{gen}", title=L"t=%$(t_str), p_0=%$(p_str)", ylabel=L"\Vert u(t, x, p_0+p^{(1)}) - u_\mathrm{est}(t, x, p_0+p^{(1)}\Vert_{L_1}", xlabel=L"p^{(1)}", legend=:bottomleft, lw=2, ms=6, get_plot_style_kwargs()...)
+	plot!(fig, Δp, data_broad; marker=:o, label="Estimate only with exact "*L"u^{(1)}_\mathrm{broad}", lw=2, ms=6)
+	plot!(fig, Δp, v->0.1*v; ls=:dashdot, label=L"\mathcal{O}(|p^{(1)}|)", lw=4)
+	plot!(fig, Δp, v->0.1*v^2; ls=:dashdot, label=L"\mathcal{O}(|p^{(1)}|^2)", lw=4)
+	fig
 end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
@@ -802,8 +492,8 @@ PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 DifferentiationInterface = "a0c0ee7d-e4b9-4e03-894e-1c5f64a51d63"
+DiscreteGeneralizedSensitivities = "eb9eecac-26dc-45b7-83f2-1d878d2a5a88"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
-Interpolations = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
 LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Markdown = "d6f4376e-aef5-505a-96c1-9c027394607a"
@@ -812,28 +502,26 @@ Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 SimpleIntegration = "f1de6737-2331-4f40-83c2-33cf2af9fc78"
-StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [compat]
 BenchmarkTools = "~1.6.3"
-DifferentiationInterface = "~0.7.12"
-ForwardDiff = "~1.3.0"
-Interpolations = "~0.16.2"
+DifferentiationInterface = "~0.7.13"
+DiscreteGeneralizedSensitivities = "~0.1.1"
+ForwardDiff = "~1.3.1"
 LaTeXStrings = "~1.4.0"
-OhMyThreads = "~0.8.3"
-Plots = "~1.41.2"
-PlutoUI = "~0.7.76"
+OhMyThreads = "~0.8.4"
+Plots = "~1.41.3"
+PlutoUI = "~0.7.77"
 SimpleIntegration = "~0.1.3"
-StaticArrays = "~1.9.15"
 """
 
 # ╔═╡ 00000000-0000-0000-0000-000000000002
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.12.3"
+julia_version = "1.12.4"
 manifest_format = "2.0"
-project_hash = "56aaa5235cd926a06e9766ab088a2cca7490e05f"
+project_hash = "2c38fc778c1446c3c589b5cba27dc28b33e25a83"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "8b2b045b22740e4be20654175cc38291d48539db"
@@ -880,17 +568,6 @@ version = "0.1.43"
     Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
     Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
-[[deps.Adapt]]
-deps = ["LinearAlgebra", "Requires"]
-git-tree-sha1 = "7e35fca2bdfba44d797c53dfe63a51fabf39bfc0"
-uuid = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
-version = "4.4.0"
-weakdeps = ["SparseArrays", "StaticArrays"]
-
-    [deps.Adapt.extensions]
-    AdaptSparseArraysExt = "SparseArrays"
-    AdaptStaticArraysExt = "StaticArrays"
-
 [[deps.AliasTables]]
 deps = ["PtrArrays", "Random"]
 git-tree-sha1 = "9876e1e164b144ca45e9e3198d0b689cadfed9ff"
@@ -904,12 +581,6 @@ version = "1.1.2"
 [[deps.Artifacts]]
 uuid = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
 version = "1.11.0"
-
-[[deps.AxisAlgorithms]]
-deps = ["LinearAlgebra", "Random", "SparseArrays", "WoodburyMatrices"]
-git-tree-sha1 = "01b8ccb13d68535d73d2b0c23e39bd23155fb712"
-uuid = "13072b0f-2c55-5437-9ae7-d433b7a33950"
-version = "1.1.0"
 
 [[deps.BangBang]]
 deps = ["Accessors", "ConstructionBase", "InitialValues", "LinearAlgebra"]
@@ -959,16 +630,6 @@ deps = ["Artifacts", "Bzip2_jll", "CompilerSupportLibraries_jll", "Fontconfig_jl
 git-tree-sha1 = "fde3bf89aead2e723284a8ff9cdf5b551ed700e8"
 uuid = "83423d85-b0ee-5818-9007-b63ccbeb887a"
 version = "1.18.5+0"
-
-[[deps.ChainRulesCore]]
-deps = ["Compat", "LinearAlgebra"]
-git-tree-sha1 = "e4c6a16e77171a5f5e25e9646617ab1c276c5607"
-uuid = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
-version = "1.26.0"
-weakdeps = ["SparseArrays"]
-
-    [deps.ChainRulesCore.extensions]
-    ChainRulesCoreSparseArraysExt = "SparseArrays"
 
 [[deps.ChunkSplitters]]
 git-tree-sha1 = "63a3903063d035260f0f6eab00f517471c5dc784"
@@ -1111,9 +772,9 @@ version = "1.15.1"
 
 [[deps.DifferentiationInterface]]
 deps = ["ADTypes", "LinearAlgebra"]
-git-tree-sha1 = "80bd15222b3e8d0bc70d921d2201aa0084810ce5"
+git-tree-sha1 = "1d5a93ce22dfa78d202b3bd6ad8afa3d69fcd129"
 uuid = "a0c0ee7d-e4b9-4e03-894e-1c5f64a51d63"
-version = "0.7.12"
+version = "0.7.13"
 
     [deps.DifferentiationInterface.extensions]
     DifferentiationInterfaceChainRulesCoreExt = "ChainRulesCore"
@@ -1159,10 +820,11 @@ version = "0.7.12"
     Tracker = "9f7883ad-71c0-57eb-9f7f-b5c9e6d3789c"
     Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
-[[deps.Distributed]]
-deps = ["Random", "Serialization", "Sockets"]
-uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
-version = "1.11.0"
+[[deps.DiscreteGeneralizedSensitivities]]
+deps = ["DifferentiationInterface", "ForwardDiff", "SimpleIntegration"]
+git-tree-sha1 = "1158896531dc3acf419ff6093491b78e668e7444"
+uuid = "eb9eecac-26dc-45b7-83f2-1d878d2a5a88"
+version = "0.1.1"
 
 [[deps.DocStringExtensions]]
 git-tree-sha1 = "7442a5dfe1ebb773c29cc2962a8980f47221d76c"
@@ -1200,9 +862,9 @@ version = "0.4.5"
 
 [[deps.FFMPEG_jll]]
 deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "JLLWrappers", "LAME_jll", "Libdl", "Ogg_jll", "OpenSSL_jll", "Opus_jll", "PCRE2_jll", "Zlib_jll", "libaom_jll", "libass_jll", "libfdk_aac_jll", "libvorbis_jll", "x264_jll", "x265_jll"]
-git-tree-sha1 = "ccc81ba5e42497f4e76553a5545665eed577a663"
+git-tree-sha1 = "01ba9d15e9eae375dc1eb9589df76b3572acd3f2"
 uuid = "b22a6f82-2f65-5046-a5b2-351ab43fb4e5"
-version = "8.0.0+0"
+version = "8.0.1+0"
 
 [[deps.FileWatching]]
 uuid = "7b1f6079-737a-58dc-b8bc-7a2ca5c1b5ee"
@@ -1227,13 +889,15 @@ version = "1.3.7"
 
 [[deps.ForwardDiff]]
 deps = ["CommonSubexpressions", "DiffResults", "DiffRules", "LinearAlgebra", "LogExpFunctions", "NaNMath", "Preferences", "Printf", "Random", "SpecialFunctions"]
-git-tree-sha1 = "cd33c7538e68650bd0ddbb3f5bd50a4a0fa95b50"
+git-tree-sha1 = "b2977f86ed76484de6f29d5b36f2fa686f085487"
 uuid = "f6369f11-7733-5829-9624-2563aa707210"
-version = "1.3.0"
-weakdeps = ["StaticArrays"]
+version = "1.3.1"
 
     [deps.ForwardDiff.extensions]
     ForwardDiffStaticArraysExt = "StaticArrays"
+
+    [deps.ForwardDiff.weakdeps]
+    StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [[deps.FreeType2_jll]]
 deps = ["Artifacts", "Bzip2_jll", "JLLWrappers", "Libdl", "Zlib_jll"]
@@ -1345,20 +1009,6 @@ deps = ["Markdown"]
 uuid = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
 version = "1.11.0"
 
-[[deps.Interpolations]]
-deps = ["Adapt", "AxisAlgorithms", "ChainRulesCore", "LinearAlgebra", "OffsetArrays", "Random", "Ratios", "SharedArrays", "SparseArrays", "StaticArrays", "WoodburyMatrices"]
-git-tree-sha1 = "65d505fa4c0d7072990d659ef3fc086eb6da8208"
-uuid = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
-version = "0.16.2"
-
-    [deps.Interpolations.extensions]
-    InterpolationsForwardDiffExt = "ForwardDiff"
-    InterpolationsUnitfulExt = "Unitful"
-
-    [deps.Interpolations.weakdeps]
-    ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
-    Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
-
 [[deps.InverseFunctions]]
 git-tree-sha1 = "a779299d77cd080bf77b97535acecd73e1c5e5cb"
 uuid = "3587e190-3f89-42d0-90ee-14403ec27112"
@@ -1400,9 +1050,9 @@ version = "1.3.0"
 
 [[deps.JpegTurbo_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "4255f0032eafd6451d707a51d5f0248b8a165e4d"
+git-tree-sha1 = "b6893345fd6658c8e475d40155789f4860ac3b21"
 uuid = "aacddb02-875f-59d6-b918-886e6ef4fbf8"
-version = "3.1.3+0"
+version = "3.1.4+0"
 
 [[deps.JuliaSyntaxHighlighting]]
 deps = ["StyledStrings"]
@@ -1596,7 +1246,7 @@ version = "1.11.0"
 
 [[deps.MozillaCACerts_jll]]
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
-version = "2025.5.20"
+version = "2025.11.4"
 
 [[deps.NaNMath]]
 deps = ["OpenLibm_jll"]
@@ -1608,15 +1258,6 @@ version = "1.1.3"
 uuid = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
 version = "1.3.0"
 
-[[deps.OffsetArrays]]
-git-tree-sha1 = "117432e406b5c023f665fa73dc26e79ec3630151"
-uuid = "6fe1bfb0-de20-5000-8ca7-80f57d26f881"
-version = "1.17.0"
-weakdeps = ["Adapt"]
-
-    [deps.OffsetArrays.extensions]
-    OffsetArraysAdaptExt = "Adapt"
-
 [[deps.Ogg_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
 git-tree-sha1 = "b6aa4566bb7ae78498a5e68943863fa8b5231b59"
@@ -1625,9 +1266,9 @@ version = "1.3.6+0"
 
 [[deps.OhMyThreads]]
 deps = ["BangBang", "ChunkSplitters", "ScopedValues", "StableTasks", "TaskLocalValues"]
-git-tree-sha1 = "e0a1a8b92f6c6538b2763196f66417dddb54ac0c"
+git-tree-sha1 = "5ece5a3bbfe756517da7b9f1969a66f92fe62ad4"
 uuid = "67456a42-1dca-4109-a031-0a68de7e3ad5"
-version = "0.8.3"
+version = "0.8.4"
 weakdeps = ["Markdown"]
 
     [deps.OhMyThreads.extensions]
@@ -1717,9 +1358,9 @@ version = "1.4.4"
 
 [[deps.Plots]]
 deps = ["Base64", "Contour", "Dates", "Downloads", "FFMPEG", "FixedPointNumbers", "GR", "JLFzf", "JSON", "LaTeXStrings", "Latexify", "LinearAlgebra", "Measures", "NaNMath", "Pkg", "PlotThemes", "PlotUtils", "PrecompileTools", "Printf", "REPL", "Random", "RecipesBase", "RecipesPipeline", "Reexport", "RelocatableFolders", "Requires", "Scratch", "Showoff", "SparseArrays", "Statistics", "StatsBase", "TOML", "UUIDs", "UnicodeFun", "Unzip"]
-git-tree-sha1 = "7b990898534ea9797bf9bf21bd086850e5d9f817"
+git-tree-sha1 = "459d8913a8b83c7222eb629664283653dadfe2b6"
 uuid = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
-version = "1.41.2"
+version = "1.41.3"
 
     [deps.Plots.extensions]
     FileIOExt = "FileIO"
@@ -1737,9 +1378,9 @@ version = "1.41.2"
 
 [[deps.PlutoUI]]
 deps = ["AbstractPlutoDingetjes", "Base64", "ColorTypes", "Dates", "Downloads", "FixedPointNumbers", "Hyperscript", "HypertextLiteral", "IOCapture", "InteractiveUtils", "Logging", "MIMEs", "Markdown", "Random", "Reexport", "URIs", "UUIDs"]
-git-tree-sha1 = "0d751d4ceb9dbd402646886332c2f99169dc1cfd"
+git-tree-sha1 = "6ed167db158c7c1031abf3bd67f8e689c8bdf2b7"
 uuid = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
-version = "0.7.76"
+version = "0.7.77"
 
 [[deps.PrecompileTools]]
 deps = ["Preferences"]
@@ -1749,9 +1390,9 @@ version = "1.3.3"
 
 [[deps.Preferences]]
 deps = ["TOML"]
-git-tree-sha1 = "0f27480397253da18fe2c12a4ba4eb9eb208bf3d"
+git-tree-sha1 = "522f093a29b31a93e34eaea17ba055d850edea28"
 uuid = "21216c6a-2e73-6563-6e65-726566657250"
-version = "1.5.0"
+version = "1.5.1"
 
 [[deps.Printf]]
 deps = ["Unicode"]
@@ -1802,16 +1443,6 @@ deps = ["SHA"]
 uuid = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 version = "1.11.0"
 
-[[deps.Ratios]]
-deps = ["Requires"]
-git-tree-sha1 = "1342a47bf3260ee108163042310d26f2be5ec90b"
-uuid = "c84ed2f1-dad5-54f0-aa8e-dbefe2724439"
-version = "0.4.5"
-weakdeps = ["FixedPointNumbers"]
-
-    [deps.Ratios.extensions]
-    RatiosFixedPointNumbersExt = "FixedPointNumbers"
-
 [[deps.RecipesBase]]
 deps = ["PrecompileTools"]
 git-tree-sha1 = "5c3d09cc4f31f5fc6af001c250bf1278733100ff"
@@ -1861,11 +1492,6 @@ version = "1.3.0"
 uuid = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
 version = "1.11.0"
 
-[[deps.SharedArrays]]
-deps = ["Distributed", "Mmap", "Random", "Serialization"]
-uuid = "1a1011a3-84de-559e-8e89-a11a2f7dc383"
-version = "1.11.0"
-
 [[deps.Showoff]]
 deps = ["Dates", "Grisu"]
 git-tree-sha1 = "91eddf657aca81df9ae6ceb20b959ae5653ad1de"
@@ -1903,10 +1529,12 @@ deps = ["IrrationalConstants", "LogExpFunctions", "OpenLibm_jll", "OpenSpecFun_j
 git-tree-sha1 = "f2685b435df2613e25fc10ad8c26dddb8640f547"
 uuid = "276daf66-3868-5448-9aa4-cd146d93841b"
 version = "2.6.1"
-weakdeps = ["ChainRulesCore"]
 
     [deps.SpecialFunctions.extensions]
     SpecialFunctionsChainRulesCoreExt = "ChainRulesCore"
+
+    [deps.SpecialFunctions.weakdeps]
+    ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
 
 [[deps.StableRNGs]]
 deps = ["Random"]
@@ -1918,17 +1546,6 @@ version = "1.0.4"
 git-tree-sha1 = "c4f6610f85cb965bee5bfafa64cbeeda55a4e0b2"
 uuid = "91464d47-22a1-43fe-8b7f-2d57ee82463f"
 version = "0.1.7"
-
-[[deps.StaticArrays]]
-deps = ["LinearAlgebra", "PrecompileTools", "Random", "StaticArraysCore"]
-git-tree-sha1 = "b8693004b385c842357406e3af647701fe783f98"
-uuid = "90137ffa-7385-5640-81b9-e52037218182"
-version = "1.9.15"
-weakdeps = ["ChainRulesCore", "Statistics"]
-
-    [deps.StaticArrays.extensions]
-    StaticArraysChainRulesCoreExt = "ChainRulesCore"
-    StaticArraysStatisticsExt = "Statistics"
 
 [[deps.StaticArraysCore]]
 git-tree-sha1 = "6ab403037779dae8c514bad259f32a447262455a"
@@ -2052,12 +1669,6 @@ deps = ["Artifacts", "EpollShim_jll", "Expat_jll", "JLLWrappers", "Libdl", "Libf
 git-tree-sha1 = "96478df35bbc2f3e1e791bc7a3d0eeee559e60e9"
 uuid = "a2964d1f-97da-50d4-b82a-358c7fce9d89"
 version = "1.24.0+0"
-
-[[deps.WoodburyMatrices]]
-deps = ["LinearAlgebra", "SparseArrays"]
-git-tree-sha1 = "c1a7aa6219628fcd757dede0ca95e245c5cd9511"
-uuid = "efce3f68-66dc-5838-9240-27a6d6f5f9b6"
-version = "1.0.0"
 
 [[deps.XZ_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -2315,83 +1926,52 @@ version = "1.13.0+0"
 """
 
 # ╔═╡ Cell order:
-# ╠═79a25182-d5ea-11f0-9c90-8d8fe9898caa
-# ╠═182af265-54de-4fd2-8fef-cf4120a8d2ac
-# ╠═4bdfb681-ad1a-4a8b-81e1-ca7f6f570665
-# ╠═bd1eaf9e-5f02-484e-878a-92605b82d917
-# ╠═51f42cc7-6ff6-48f6-8dfd-9cd17c87e6c8
-# ╠═292898dc-fb6c-41c8-a04f-266ba4c052fa
 # ╟─2a3e08e6-2626-45fa-a6f3-8b152d772dc1
+# ╠═1e9e3a11-a840-4bbc-b1e4-b5a131147642
 # ╟─80c58feb-f9e6-4f64-8fd5-ddd68ba61866
 # ╠═cc3ca582-12f3-48a3-86ec-faddfec278f3
 # ╟─95b5ca00-8896-4fbd-b9ff-6f3853fc096a
-# ╠═8c3fb8d1-9a1a-41e0-9f28-5cb70b3250ce
-# ╠═2b1c6db8-a963-4c09-aa89-468cb4739859
-# ╠═d6568431-a6eb-4121-8033-538b37c53289
-# ╟─017b53cc-4d71-4fc9-945c-5b7016726ced
-# ╠═bc7194b7-0e1b-4f26-8c4d-43f282a1b0fa
+# ╠═d1dc4c55-df98-4c43-80ba-14b2559b694d
 # ╟─88e11096-d1c1-4120-a25e-a1f0a3435c44
-# ╟─bf31e3b9-b661-4bb9-949c-0850387129c3
 # ╟─582df058-cd59-4840-b9bb-cb157e2d3867
 # ╟─44f28d9e-4101-46f7-a321-ec058b414884
 # ╟─20061a5a-b40b-46bb-8e5b-75ec3e6a50db
-# ╠═fe99b12f-c756-4cb3-a532-fe18fd0f3d03
-# ╠═851b2a88-1aa0-43a1-8a08-5c536a2abc75
-# ╠═4ab76c0d-9de7-4858-9fea-c20e5efeb6e4
-# ╟─9ad2486d-1370-4008-8888-d257cdeb4982
 # ╟─0757b407-ed26-407d-a294-b8e15371aed1
-# ╟─edeca56b-d86d-4506-875f-b42f2159b82a
 # ╟─fb9534f9-ad52-4425-8358-c84f4c5d6d74
-# ╠═0f7ce95b-9d92-4f5a-8811-4bb80787d030
-# ╠═eea8b0e4-bb9d-43ff-bd0b-1a7f8e1462f9
 # ╟─e93d9cef-dec3-41f0-bc6c-8cd755c495fb
 # ╟─c1e4d0d0-111a-47a9-87db-9a5cf0f72af5
 # ╟─9b6746ad-fd16-4bd2-a7b3-4f9315b58ef6
-# ╟─c8a4aa19-fa10-48a4-a905-54d0a38e29e5
+# ╠═a01465aa-2cf4-442f-a02f-c617dafe7ba7
+# ╠═c8a4aa19-fa10-48a4-a905-54d0a38e29e5
 # ╟─943c0281-1179-425b-838c-5decf0e9a7e9
 # ╟─7a5977df-3cb3-4d8e-b45e-e63981170304
 # ╟─35159259-8493-4fad-a1fb-25801ef4db13
-# ╠═72c50045-869b-45f2-97bd-aac2f817f4ba
 # ╟─ba60ee99-2896-451b-a893-3573c7ddd629
-# ╠═45dea67c-cd56-4f06-b097-acbdb284bd8b
-# ╟─6066a266-c39c-4869-b26e-7c20562e9723
 # ╟─0bb57569-1e3e-4ae6-bd27-b9afbd75a831
 # ╟─b14e2bbf-cd1f-4ba4-b741-1e48e9d1acf0
 # ╟─2efb7bce-e0f1-4aff-bae7-2bc441132b64
-# ╠═bca7694b-cbc6-4716-b530-17305137a7eb
+# ╟─bca7694b-cbc6-4716-b530-17305137a7eb
 # ╟─ec59f065-d7ae-4b52-b802-54f5b6b024d3
-# ╠═0f7d6377-63bf-411b-9f4b-aaf2059d8840
 # ╟─368884ba-8e02-432d-92c2-0b13b9134b43
-# ╟─32523f1f-0451-483e-bb5d-58ac61e07f6c
-# ╟─4f6fd429-269b-4da3-93b0-1df9545f08d0
 # ╟─35a98d6e-723b-42a7-a0a3-9fdb37851ab5
 # ╟─0157f6ab-85a3-49f0-82eb-aa66ad6ad13a
 # ╟─22cdff15-d1bc-4db1-b6c7-62dd1b4ca8d2
 # ╟─dc2adf0a-05a0-4284-b9c0-e6fb9ef0d0ab
 # ╟─5d6030e9-5fd4-48cd-9206-bb48edf23cae
-# ╟─48967d88-dccf-496f-a938-8d6d9ee55f03
-# ╟─b9c376ef-d77e-426f-a794-aeffb67725ce
-# ╠═cf93d143-5f2f-4346-87ca-d201145b1f0c
 # ╟─50861340-1f49-4a0e-8278-46fe4b0c0811
 # ╟─9f4f6228-ff61-4321-b87b-0b10da84d419
-# ╠═56f9b12f-010f-4f35-9199-8b64e4970e37
+# ╟─56f9b12f-010f-4f35-9199-8b64e4970e37
 # ╟─81d44c35-5dea-4518-9366-6653fc8b5f69
-# ╟─f1ccba5e-38ab-46a7-aa25-3c8fecdc412c
-# ╟─d2e85def-e45f-48f5-9088-4fd9abd5ac56
-# ╠═728a7607-adb4-4c11-aaa5-eb120d0fcdbe
-# ╠═2e11ac23-1b9b-4753-85ae-cd63d3f1c897
-# ╠═97f03469-7b20-4d00-8cdc-f455bcb8f699
+# ╟─728a7607-adb4-4c11-aaa5-eb120d0fcdbe
+# ╟─99f59e0e-a29a-4bf7-a891-aecf60961c45
+# ╠═6796d969-d5d4-46b3-8ddb-16304ed47b51
+# ╟─3566dd4f-b18e-42cb-be69-2ae27b46dcd0
+# ╟─521a942f-1b69-4b75-b086-7d4a8ac85135
+# ╠═3341992d-c813-4733-9946-263fd38e16e1
+# ╟─d8af2219-d772-49f2-9c6c-2f842882f4da
+# ╟─97f03469-7b20-4d00-8cdc-f455bcb8f699
 # ╟─e30a83dc-9653-46a1-b50b-84ef6a2df694
-# ╟─03f332f8-d75f-4c87-9898-e0c78945c89d
-# ╠═ebce52b3-2ea9-4ae5-b376-186039eae781
-# ╟─df8f9292-30b9-4de5-860a-8fa9725a1153
-# ╠═d85f38fd-bf4f-4562-b43e-7fc0f606a9b9
-# ╠═88c033e9-3c36-46a5-81a3-65c244c645f6
-# ╠═e4225f4e-cf8c-4668-94ef-04c61cb8ba5a
-# ╠═cf21bcfb-382c-425e-9ab7-4652d34061d5
-# ╠═562c2874-f29b-4d04-b3ca-caf27dabaa04
-# ╠═e47267d6-42f9-4420-a7e2-cce3ddec95c8
-# ╠═7e9db277-3a3a-4d5b-8f6f-2a0ae6bd3ad7
 # ╠═2d535aaf-00e7-4537-9519-04a5c4a65da6
+# ╠═feafb65b-6a32-41e3-a81f-0b943441ffc0
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
