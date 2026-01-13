@@ -67,7 +67,7 @@ Can be downloaded from CLAIX, if you want to play with it yourself.
 """
 
 # ╔═╡ 246be280-b813-4e17-b33e-c13327882c3e
-const JOB_ID = 61836329
+const JOB_ID = 63313887
 
 # ╔═╡ e7966276-b939-4cd6-9734-00927fd90109
 const NUM_AVAILABLE_SIMULATIONS = length(readdir("../data/$JOB_ID/"))
@@ -86,7 +86,7 @@ const GAS = DRY_AIR;
 
 # ╔═╡ c929d5e1-afe3-4b39-b158-7ac40fbe8081
 trimmed_simulations = [
-	load_cell_sim("../data/$JOB_ID/$i/bow_shock_t30.celltape"; show_info=false) for i=1:length(grid_study_parameters)
+	load_cell_sim("../data/$JOB_ID/$i/bow_shock_converged.celltape"; show_info=false) for i=1:length(grid_study_parameters)
 ];
 
 # ╔═╡ 49943587-b1d0-4f27-b793-b9adbe7b6d0d
@@ -207,7 +207,7 @@ The ratio of coarse cell volume to simulation cell volume is given in the title.
 @bind STUDY1_NGRID_IDX Slider(1:length(GRID_SIZES); show_value=true, default=2)
 
 # ╔═╡ 689f2234-2976-4302-9fc0-41fa8501e8d0
-@bind STUDY1_NCOARSE_IDX Slider(1:length(N_COARSE); show_value=true, default=4)
+@bind STUDY1_NCOARSE_IDX Slider(1:length(N_COARSE); show_value=true, default=3)
 
 # ╔═╡ adf74bd9-f6c7-4f4d-951a-016f9146f7ca
 @bind STUDY1_DCOARSE_IDX Slider(1:length(COARSE_WIDTH); show_value=true, default=2)
@@ -235,10 +235,10 @@ The following chart shows the ``L_1`` error between the predicted shock position
 @bind STUDY1A_DM_IDX Slider(1:length(MACH_NUMBER_PARAMS)-1; show_value=true, default=2)
 
 # ╔═╡ ac0e5880-e983-40f5-93f6-d8fb9b346828
-@bind STUDY1A_NGRID_IDX Slider(1:length(GRID_SIZES); show_value=true, default=4)
+@bind STUDY1A_NGRID_IDX Slider(1:length(GRID_SIZES); show_value=true, default=2)
 
 # ╔═╡ 0fe81589-9225-429d-b5c7-0c3b60119694
-@bind STUDY1A_DCOARSE_IDX Slider(1:length(GRID_SIZES); show_value=true, default=3)
+@bind STUDY1A_DCOARSE_IDX Slider(1:length(GRID_SIZES); show_value=true, default=1)
 
 # ╔═╡ dc132088-6a18-441a-a753-e0c45eba8980
 md"""
@@ -575,7 +575,7 @@ end
 let N = N_info_1
 	id = infos_study[N].job_idx
 	p = plot_coarse_dual(infos_study[N], trimmed_simulations[id], shock_interpolations[id], coarse_duals_study[N])
-	s_disp = displaced_shock(shock_interpolations[id], ξ_study[N], SVector(0., 0.1, 0.))
+	s_disp = displaced_shock(shock_interpolations[id], ξ_study[N], SVector(0., 0.5, 0.))
 	px = [s_disp(s)[1] for s ∈ 0.0:0.02:1.0]
 	py = [s_disp(s)[2] for s ∈ 0.0:0.02:1.0]
 	plot!(p, px, py; label="Shock + Perturbation; "*L"\Delta M =0.1", lw=4, ls=:dot)
@@ -631,7 +631,7 @@ let A=STUDY1A_DM_IDX; B=STUDY1A_NGRID_IDX; C=STUDY1A_DCOARSE_IDX
 		return l1_error_between_curves_same_ys(shock_interpolations[i], Γ, s)
 	end
 	dM_str = @sprintf "%.2f" first(dM)
-	p = plot([c.n_coarse for c in compare], l1_errs; label=L"L_1"*" error in shock displacement", xflip=true, yscale=:identity, xticks=[c.n_coarse for c in compare], legend=:bottomright, xlabel=L"N_{coarse}", ylabel=L"L_1"*" error", title=L"N_x=%$(compare[end].Nx), \Delta M=%$(dM_str)")
+	p = plot([c.n_coarse for c in compare], l1_errs; label=L"L_1"*" error in shock displacement", yscale=:identity, xticks=[c.n_coarse for c in compare], legend=:bottomright, xlabel=L"N_{coarse}", ylabel=L"L_1"*" error", title=L"N_x=%$(compare[end].Nx), \Delta M=%$(dM_str)")
 	plot!(p, [8], [0.]; label=false)
 	p
 end
@@ -808,7 +808,7 @@ function make_bressan_interpolation(f,
 end
 
 # ╔═╡ f4f9ce73-a5e7-469c-9c1c-a0173ab05d92
-let N = 208; dM=dM_pressure_shift_test
+let N = 48; dM=dM_pressure_shift_test
 	n1 = infos_study[N].job_idx
 	bi = make_bressan_interpolation(
 	u->dimensionless_pressure(u, GAS), trimmed_simulations[n1], 1, 
@@ -1027,7 +1027,7 @@ Unitful = "~1.25.0"
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.12.2"
+julia_version = "1.12.4"
 manifest_format = "2.0"
 project_hash = "0309ec43693e76b90d3ea12391968cbc35284853"
 
@@ -2058,7 +2058,7 @@ version = "0.3.7"
 
 [[deps.MozillaCACerts_jll]]
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
-version = "2025.5.20"
+version = "2025.11.4"
 
 [[deps.NaNMath]]
 deps = ["OpenLibm_jll"]
@@ -2191,7 +2191,7 @@ version = "0.44.2+0"
 [[deps.Pkg]]
 deps = ["Artifacts", "Dates", "Downloads", "FileWatching", "LibGit2", "Libdl", "Logging", "Markdown", "Printf", "Random", "SHA", "TOML", "Tar", "UUIDs", "p7zip_jll"]
 uuid = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
-version = "1.12.0"
+version = "1.12.1"
 weakdeps = ["REPL"]
 
     [deps.Pkg.extensions]
@@ -3096,7 +3096,7 @@ version = "1.9.2+0"
 # ╟─48f20a1e-ed0e-4162-9654-3c95d2f2d54a
 # ╟─1bdab4fe-4221-4424-b6cd-f1252fa01a56
 # ╟─645aa994-b0d6-4730-8ff9-5a4355c8ba70
-# ╠═1d6acc0c-602d-4100-a3db-083fc7bf72fd
+# ╟─1d6acc0c-602d-4100-a3db-083fc7bf72fd
 # ╟─9c367f06-a4cf-4313-af3d-b68ba3045f2c
 # ╟─3c17ff8d-9db8-492e-9444-b52c04ead23e
 # ╟─3498c1df-dca2-4927-9f9d-6ff09213bc95
