@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.20.21
+# v1.0.1
 
 #> [frontmatter]
 #> title = "Weno Schemes & AD"
@@ -142,16 +142,26 @@ end
 # ╔═╡ 30c4efa6-530a-46be-90da-16f8cfd1f35b
 begin
 	function _weno3_smoothness_coeffs()
-		return @SArray [1 -2 1; 1 -4 3;;; 1 -2 1; 1 0 -1;;; 1 -2 1; 3 -4 1]
+    	return @SArray [
+        	1;-4; 3;;
+        	1;-2; 1;;;
+        	1; 0;-1;;
+        	1;-2; 1;;;
+        	3;-4; 1;;
+        	1;-2; 1
+    	]
 	end
 	function _weno3_smoothness_coeffs(k)
 		return _weno3_smoothness_coeffs()[:, :, begin+k]
+	end
+	function _weno3_smoothness_coeffs(ℓ, k)
+		return _weno3_smoothness_coeffs()[:, ℓ, begin+k]
 	end
 end
 
 # ╔═╡ eda6f638-6c7f-48df-bced-36a82b10c35b
 function _weno3_smoothness_prefactors()
-	return @SVector [13/12, 1/4]
+	return @SVector [1/4, 13/12]
 end
 
 # ╔═╡ 664f1a07-5d12-4d90-8e4c-807bf5ac9fb7
@@ -163,12 +173,6 @@ end
 md"""
 ### WENO-3 Stencil(s)
 """
-
-# ╔═╡ 344a00da-f37a-43a2-a9a0-8efcbc3042db
-function _weno3_smoothness(f_stencil, k)
-	coeffs = _weno3_smoothness_prefactors()
-	return coeffs' * ((_weno3_smoothness_coeffs(k) * f_stencil) .^ 2)
-end
 
 # ╔═╡ f637da78-6914-4553-95ef-d102e7d95b5a
 # ISK is guaranteed to be a an array of length 3
@@ -183,28 +187,6 @@ end
 md"""
 We have to be careful here, because we assume that ``f'(u) \geq 0`` (which it is, because our initial condition meets this condition). 
 """
-
-# ╔═╡ 1bf1a41a-db6c-4310-80dd-abd310989e00
-function F_weno3!(F_cons, F_buf)
-	# do I want OhMyThreads here? maybe switch depending on the size of F_buf?
-	# maybe the kernel is heavy enough that the threading threshold is quite low
-	tforeach(axes(F_buf,1)[begin+3:end-3]) do j
-		F_stencils = ntuple(3) do k_idx
-			k = k_idx - 1
-			return @view F_buf[(j+k-2):(j+k)]
-		end |> SVector
-		ISk = ntuple(3) do k_idx
-			k = k_idx - 1
-			f_stencil = @view F_buf[(j+k-2):(j+k)]
-			return _weno3_smoothness(f_stencil, k)
-		end |> SVector
-		wk = _weno3_stencil_weights(ISk)
-		F_cons[j] = zero(eltype(F_cons))
-		for k ∈ 0:2
-			F_cons[j] += wk[begin+k] * (_eno3_stencil_coeffs(k)' * F_stencils[begin+k])
-		end
-	end
-end
 
 # ╔═╡ 540eec09-e3bf-4056-9d22-3d05b5dd7f59
 md"""
@@ -223,7 +205,7 @@ One might notice that this method does not require the storage of ``U^{\star\sta
 
 # ╔═╡ d8d0293b-3655-4a19-929d-ed0b9f9f06e6
 md"""
-We'll play the same game with DifferentiationInterface as before:
+We'll play the same game with `DifferentiationInterface` as before:
 """
 
 # ╔═╡ 8c84b36d-141f-441c-8174-406021b839b1
@@ -328,6 +310,74 @@ function solve_pde_lax_friedrichs!(U, U_dot, xs, T_end, cfl_number)
 		U .= U_next
 		U_dot .= U_dot_next
 		t += Δt
+	end
+end
+
+# ╔═╡ b1b999da-011c-4344-a305-f71abfebec76
+begin
+	X(x, a, b) = a ≤ x ≤ b
+	X(x, ival) = X(x, ival...)
+end
+
+# ╔═╡ 1fa20a3f-ca4b-4e53-9528-9f4c6cb069da
+u_0(x, p) = (1+p)*x*X(x, 0, 1)
+
+# ╔═╡ 54deeba8-2227-40a9-b2ac-5279442dab21
+u(t, x, p) = ((1+p)*x)/(1+(1+p)*t)*X(x, 0, ξ(t,p))
+
+# ╔═╡ 44c6279a-ed42-47c5-bb06-2f95bb9e6a43
+function get_ics(xs, p)
+	U = map(xs) do x
+		u_0(x, p)
+	end
+	U_dot = map(xs) do x
+		derivative(v->u_0(x, v), fdiff_backend, p)
+	end
+	return (U, U_dot)
+end
+
+# ╔═╡ 28684f30-4439-4514-8f94-961a88979bab
+let N = Nx_LF+1
+	xs = range(-1., 2, length=N)
+	U, Udot = get_ics(xs, 0.5)
+	fig = plot(xs, [U Udot], labels=[L"u_0(x,0.5)" L"u^{(1)}_0(x,0.5)"], lw=2)
+	solve_pde_lax_friedrichs!(U, Udot, xs, 1.0, 0.75)
+	plot!(fig, xs, [U Udot], ylims=(0, 2), labels=[L"U(1.0, x,0.5)" L"U^{(1)}(1.0, x,0.5)"], title="Lax-Friedrichs Solution at "*L"t=1.0, p=0.5, \lambda=\frac{3}{4}", xlabel=L"x", dpi=600, lw=2, size=(800, 600))
+end
+
+# ╔═╡ fc7b8317-4280-4309-b834-fad64ab9ae9e
+begin
+	opnorm2_sqr(u) = eigmax(u' * u)
+	opnorm2_sqr(u, A) = eigmax(u' * A * u)
+end
+
+# ╔═╡ 344a00da-f37a-43a2-a9a0-8efcbc3042db
+function _weno3_smoothness(u_Sk, k)
+    return mapreduce(+, SOneTo(2)) do ℓ
+        dq_k = _weno3_smoothness_coeffs(ℓ, k)' * u_Sk
+        return _weno3_smoothness_prefactors()[ℓ] * opnorm2_sqr(dq_k)
+    end
+end
+
+# ╔═╡ 1bf1a41a-db6c-4310-80dd-abd310989e00
+function F_weno3!(F_cons, F_buf)
+	# do I want OhMyThreads here? maybe switch depending on the size of F_buf?
+	# maybe the kernel is heavy enough that the threading threshold is quite low
+	tforeach(axes(F_buf,1)[begin+3:end-3]) do j
+		F_stencils = ntuple(3) do k_idx
+			k = k_idx - 1
+			return @view F_buf[(j+k-2):(j+k)]
+		end |> SVector
+		ISk = ntuple(3) do k_idx
+			k = k_idx - 1
+			f_stencil = @view F_buf[(j+k-2):(j+k)]
+			return _weno3_smoothness(f_stencil, k)
+		end |> SVector
+		wk = _weno3_stencil_weights(ISk)
+		F_cons[j] = zero(eltype(F_cons))
+		for k ∈ 0:2
+			F_cons[j] += wk[begin+k] * (_eno3_stencil_coeffs(k)' * F_stencils[begin+k])
+		end
 	end
 end
 
@@ -441,45 +491,15 @@ function solve_pde_weno3!(U, U_dot, xs, T_end, cfl_number)
 	end
 end
 
-# ╔═╡ b1b999da-011c-4344-a305-f71abfebec76
-begin
-	X(x, a, b) = a ≤ x ≤ b
-	X(x, ival) = X(x, ival...)
-end
-
-# ╔═╡ 1fa20a3f-ca4b-4e53-9528-9f4c6cb069da
-u_0(x, p) = (1+p)*x*X(x, 0, 1)
-
-# ╔═╡ 54deeba8-2227-40a9-b2ac-5279442dab21
-u(t, x, p) = ((1+p)*x)/(1+(1+p)*t)*X(x, 0, ξ(t,p))
-
-# ╔═╡ 44c6279a-ed42-47c5-bb06-2f95bb9e6a43
-function get_ics(xs, p)
-	U = map(xs) do x
-		u_0(x, p)
-	end
-	U_dot = map(xs) do x
-		derivative(v->u_0(x, v), fdiff_backend, p)
-	end
-	return (U, U_dot)
-end
-
-# ╔═╡ 28684f30-4439-4514-8f94-961a88979bab
-let N = Nx_LF+1
-	xs = range(-1., 2, length=N)
-	U, Udot = get_ics(xs, 0.5)
-	fig = plot(xs, [U Udot], labels=[L"u_0(x,0.5)" L"u^{(1)}_0(x,0.5)"], lw=2)
-	solve_pde_lax_friedrichs!(U, Udot, xs, 1.0, 0.75)
-	plot!(fig, xs, [U Udot], ylims=(0, 2), labels=[L"U(1.0, x,0.5)" L"U^{(1)}(1.0, x,0.5)"], title="Lax-Friedrichs Solution at "*L"t=1.0, p=0.5, \lambda=\frac{3}{4}", xlabel=L"x", dpi=600, lw=2, size=(800, 600))
-end
-
 # ╔═╡ db52ed09-d564-4c85-9867-484aca10ccb3
 let N = Nx_WENO+1
 	xs = range(-1., 2., length=N)
-	U, Udot = get_ics(xs, 0.5)
+	U, Udot = get_ics(xs, 1.0)
 	fig = plot(xs, [U Udot], labels=[L"u_0(x,0.5)" L"u^{(1)}_0(x,0.5)"], lw=2)
 	solve_pde_weno3!(U, Udot, xs, 1.0, 0.75)
 	plot!(fig, xs, [U Udot], ylims=(0, 2), labels=[L"U(1.0, x,0.5)" L"U^{(1)}(1.0, x,0.5)"], title="WENO-3 Solution at "*L"t=1.0, p=0.5, \lambda=\frac{3}{4}", xlabel=L"x", dpi=600, size=(800, 600), lw=2)
+	vline!(fig, [ξ(1.0, 1.0)-2*step(xs)^(2/3),ξ(1.0, 1.0)+2*step(xs)^(2/3)])
+	xlims!(fig, (1.6, 1.8))
 end
 
 # ╔═╡ 3a5d4faf-b9db-40fd-b559-24611e71b733
@@ -519,7 +539,7 @@ Tullio = "~0.3.8"
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.12.4"
+julia_version = "1.12.5"
 manifest_format = "2.0"
 project_hash = "e9cd25208d287781d23eabd7382483f5fe5b33e9"
 
@@ -923,7 +943,7 @@ uuid = "c87230d0-a227-11e9-1b43-d7ebe4e7570a"
 version = "0.4.5"
 
 [[deps.FFMPEG_jll]]
-deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "JLLWrappers", "LAME_jll", "Libdl", "Ogg_jll", "OpenSSL_jll", "Opus_jll", "PCRE2_jll", "Zlib_jll", "libaom_jll", "libass_jll", "libfdk_aac_jll", "libvorbis_jll", "x264_jll", "x265_jll"]
+deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "JLLWrappers", "LAME_jll", "Libdl", "Ogg_jll", "OpenSSL_jll", "Opus_jll", "PCRE2_jll", "Zlib_jll", "libaom_jll", "libass_jll", "libfdk_aac_jll", "libva_jll", "libvorbis_jll", "x264_jll", "x265_jll"]
 git-tree-sha1 = "01ba9d15e9eae375dc1eb9589df76b3572acd3f2"
 uuid = "b22a6f82-2f65-5046-a5b2-351ab43fb4e5"
 version = "8.0.1+0"
@@ -1933,6 +1953,12 @@ git-tree-sha1 = "7ed9347888fac59a618302ee38216dd0379c480d"
 uuid = "ea2f1a96-1ddc-540d-b46f-429655e07cfa"
 version = "0.9.12+0"
 
+[[deps.Xorg_libpciaccess_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Zlib_jll"]
+git-tree-sha1 = "4909eb8f1cbf6bd4b1c30dd18b2ead9019ef2fad"
+uuid = "a65dc6b1-eb27-53a1-bb3e-dea574b5389e"
+version = "0.18.1+0"
+
 [[deps.Xorg_libxcb_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libXau_jll", "Xorg_libXdmcp_jll"]
 git-tree-sha1 = "bfcaf7ec088eaba362093393fe11aa141fa15422"
@@ -2045,6 +2071,12 @@ git-tree-sha1 = "9bf7903af251d2050b467f76bdbe57ce541f7f4f"
 uuid = "1183f4f0-6f2a-5f1a-908b-139f9cdfea6f"
 version = "0.2.2+0"
 
+[[deps.libdrm_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libpciaccess_jll"]
+git-tree-sha1 = "63aac0bcb0b582e11bad965cef4a689905456c03"
+uuid = "8e53e030-5e6c-5a89-a30b-be5b7263a166"
+version = "2.4.125+1"
+
 [[deps.libevdev_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
 git-tree-sha1 = "56d643b57b188d30cccc25e331d416d3d358e557"
@@ -2068,6 +2100,12 @@ deps = ["Artifacts", "JLLWrappers", "Libdl", "Zlib_jll"]
 git-tree-sha1 = "6ab498eaf50e0495f89e7a5b582816e2efb95f64"
 uuid = "b53b4c65-9356-5827-b1ea-8c7a1a84506f"
 version = "1.6.54+0"
+
+[[deps.libva_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libX11_jll", "Xorg_libXext_jll", "Xorg_libXfixes_jll", "libdrm_jll"]
+git-tree-sha1 = "7dbf96baae3310fe2fa0df0ccbb3c6288d5816c9"
+uuid = "9a156e7d-b971-5f62-b2c9-67348b8fb97c"
+version = "2.23.0+0"
 
 [[deps.libvorbis_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Ogg_jll"]
@@ -2146,7 +2184,7 @@ version = "1.13.0+0"
 # ╠═6149ecd1-bce8-4ebf-b6e3-dc1117774eb9
 # ╟─d8d0293b-3655-4a19-929d-ed0b9f9f06e6
 # ╠═1c70523f-46bf-4106-ae37-9cafabc90b2d
-# ╟─db52ed09-d564-4c85-9867-484aca10ccb3
+# ╠═db52ed09-d564-4c85-9867-484aca10ccb3
 # ╟─8c84b36d-141f-441c-8174-406021b839b1
 # ╟─4415df1b-a1f6-4358-b20b-6907e52fd268
 # ╟─1924fe27-abb9-4d28-85b7-c8e46e0faa2c
@@ -2156,6 +2194,7 @@ version = "1.13.0+0"
 # ╠═a700664f-5fb5-40af-9e93-0fea106f32f9
 # ╠═b1b999da-011c-4344-a305-f71abfebec76
 # ╠═44c6279a-ed42-47c5-bb06-2f95bb9e6a43
+# ╠═fc7b8317-4280-4309-b834-fad64ab9ae9e
 # ╟─3a5d4faf-b9db-40fd-b559-24611e71b733
 # ╠═893feffe-fdcb-11f0-aad9-a7c7b12bf652
 # ╟─00000000-0000-0000-0000-000000000001
